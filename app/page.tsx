@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   watchlist as initialWatchlist,
   type WatchlistItem,
@@ -26,6 +26,8 @@ type SentimentResponse = {
   symbol: string;
   sentimentScore: number;
   newsCount: number;
+  sentimentLabel?: string;
+  rawScore?: number;
   error?: string;
 };
 
@@ -37,7 +39,12 @@ const num = (v: unknown, d = 0): number => {
 const clamp = (v: unknown): number => Math.max(0, Math.min(100, num(v)));
 
 export default function Dashboard() {
-    const [list, setList] = useState<Item[]>(initialWatchlist);
+  const sitePassword = process.env.NEXT_PUBLIC_SITE_PASSWORD ?? "";
+  const [authenticated, setAuthenticated] = useState(false);
+  const [passwordInput, setPasswordInput] = useState("");
+  const [loginError, setLoginError] = useState("");
+
+  const [list, setList] = useState<Item[]>(initialWatchlist);
   const [selectedSymbol, setSelectedSymbol] = useState(
     initialWatchlist[0]?.symbol ?? ""
   );
@@ -49,13 +56,43 @@ export default function Dashboard() {
   const [loadingQuote, setLoadingQuote] = useState(false);
   const [loadingSentiment, setLoadingSentiment] = useState(false);
   const [adding, setAdding] = useState(false);
-const [history, setHistory] = useState<{ time: string; price: number }[]>([]);
-const chartRef = useRef<HTMLCanvasElement | null>(null);
+
+  const [history, setHistory] = useState<{ time: string; price: number }[]>([]);
+  const chartRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const unlocked = localStorage.getItem("precision-dashboard-auth");
+    if (unlocked === "true") {
+      setAuthenticated(true);
+    }
+  }, []);
+
+  const handleLogin = () => {
+    if (!sitePassword) {
+      setLoginError("Missing site password configuration.");
+      return;
+    }
+
+    if (passwordInput === sitePassword) {
+      setAuthenticated(true);
+      localStorage.setItem("precision-dashboard-auth", "true");
+      setLoginError("");
+      setPasswordInput("");
+      return;
+    }
+
+    setLoginError("Incorrect password.");
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("precision-dashboard-auth");
+    setAuthenticated(false);
+    setPasswordInput("");
+  };
 
   const selected = useMemo(() => {
     return list.find((x) => x.symbol === selectedSymbol) ?? list[0];
   }, [list, selectedSymbol]);
-
 
   const getScore = (x: Item) =>
     Math.round(
@@ -173,12 +210,13 @@ const chartRef = useRef<HTMLCanvasElement | null>(null);
       );
 
       setHistory((prev) => [
-  ...prev.slice(-29),
-  {
-    time: new Date().toLocaleTimeString(),
-    price: num(data.price),
-  },
-]);
+        ...prev.slice(-29),
+        {
+          time: new Date().toLocaleTimeString(),
+          price: num(data.price),
+        },
+      ]);
+
       setQuoteMessage(`Live quote updated for ${symbol}.`);
     } catch {
       setQuoteMessage(`Quote failed for ${symbol}.`);
@@ -209,9 +247,9 @@ const chartRef = useRef<HTMLCanvasElement | null>(null);
           if (x.symbol !== symbol) return x;
 
           const p =
-            data.sentimentScore >= 15
+            num(data.sentimentScore) >= 65
               ? Math.min(100, x.politicalScore + 5)
-              : data.sentimentScore <= 3
+              : num(data.sentimentScore) <= 40
               ? Math.max(0, x.politicalScore - 5)
               : x.politicalScore;
 
@@ -219,7 +257,12 @@ const chartRef = useRef<HTMLCanvasElement | null>(null);
         })
       );
 
-      setSentimentMessage(`Sentiment updated for ${symbol}.`);
+      const label = data.sentimentLabel ? ` (${data.sentimentLabel})` : "";
+      setSentimentMessage(
+        `Sentiment updated for ${symbol}${label}. Score: ${num(
+          data.sentimentScore
+        )}`
+      );
     } catch {
       setSentimentMessage(`Sentiment failed for ${symbol}.`);
     } finally {
@@ -228,8 +271,9 @@ const chartRef = useRef<HTMLCanvasElement | null>(null);
   };
 
   useEffect(() => {
-    if (!selectedSymbol) return;
+    if (!authenticated || !selectedSymbol) return;
 
+    setHistory([]);
     void refreshQuote(selectedSymbol);
 
     const timer = setInterval(() => {
@@ -237,46 +281,117 @@ const chartRef = useRef<HTMLCanvasElement | null>(null);
     }, 10000);
 
     return () => clearInterval(timer);
-  }, [selectedSymbol]);
-useEffect(() => {
-  const canvas = chartRef.current;
-  if (!canvas || history.length < 2) return;
+  }, [selectedSymbol, authenticated]);
 
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
+  useEffect(() => {
+    const canvas = chartRef.current;
+    if (!canvas || history.length < 2) return;
 
-  const width = canvas.width;
-  const height = canvas.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
 
-  ctx.clearRect(0, 0, width, height);
+    const width = canvas.width;
+    const height = canvas.height;
 
-  const prices = history.map((p) => p.price);
-  const min = Math.min(...prices);
-  const max = Math.max(...prices);
-  const range = max - min || 1;
+    ctx.clearRect(0, 0, width, height);
 
-  const pad = 20;
+    const prices = history.map((p) => p.price);
+    const min = Math.min(...prices);
+    const max = Math.max(...prices);
+    const range = max - min || 1;
+    const pad = 20;
 
-  ctx.beginPath();
-  ctx.strokeStyle = "#2563eb";
-  ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.strokeStyle = "#2563eb";
+    ctx.lineWidth = 2;
 
-  history.forEach((point, i) => {
-    const x = pad + (i / (history.length - 1)) * (width - pad * 2);
-    const y =
-      height - pad - ((point.price - min) / range) * (height - pad * 2);
+    history.forEach((point, i) => {
+      const x = pad + (i / (history.length - 1)) * (width - pad * 2);
+      const y =
+        height - pad - ((point.price - min) / range) * (height - pad * 2);
 
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
 
-  ctx.stroke();
+    ctx.stroke();
 
-  ctx.fillStyle = "#111827";
-  ctx.font = "12px Arial";
-  ctx.fillText(`Low: ${min.toFixed(2)}`, 10, height - 6);
-  ctx.fillText(`High: ${max.toFixed(2)}`, width - 90, 14);
-}, [history]);
+    ctx.fillStyle = "#111827";
+    ctx.font = "12px Arial";
+    ctx.fillText(`Low: ${min.toFixed(2)}`, 10, height - 6);
+    ctx.fillText(`High: ${max.toFixed(2)}`, width - 90, 14);
+  }, [history]);
+
+  if (!authenticated) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "grid",
+          placeItems: "center",
+          background: "#f8fafc",
+          padding: 24,
+          fontFamily: "Arial, sans-serif",
+        }}
+      >
+        <div
+          style={{
+            width: "100%",
+            maxWidth: 420,
+            background: "#ffffff",
+            border: "1px solid #e5e7eb",
+            borderRadius: 12,
+            padding: 24,
+            boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
+          }}
+        >
+          <h1 style={{ marginTop: 0, marginBottom: 8 }}>Precision Swing Dashboard</h1>
+          <p style={{ color: "#6b7280", marginBottom: 20 }}>
+            Enter password to access the web app.
+          </p>
+
+          <input
+            type="password"
+            value={passwordInput}
+            onChange={(e) => setPasswordInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleLogin();
+            }}
+            placeholder="Password"
+            style={{
+              width: "100%",
+              padding: 10,
+              borderRadius: 8,
+              border: "1px solid #d1d5db",
+              marginBottom: 12,
+              boxSizing: "border-box",
+            }}
+          />
+
+          <button
+            onClick={handleLogin}
+            style={{
+              width: "100%",
+              padding: 10,
+              border: "none",
+              borderRadius: 8,
+              background: "#111827",
+              color: "#ffffff",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Login
+          </button>
+
+          {loginError ? (
+            <p style={{ color: "red", marginTop: 12 }}>{loginError}</p>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
   const score = getScore(selected);
   const signal = getSignal(score);
 
@@ -289,13 +404,37 @@ useEffect(() => {
         margin: "0 auto",
       }}
     >
-      <h1>📊 Precision Swing Dashboard</h1>
-      <p style={{ color: "#666" }}>
-        Finnhub quotes + sentiment, layered over technical, whale, macro, and
-        political scoring
-      </p>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        <div>
+          <h1 style={{ marginBottom: 6 }}>📊 Precision Swing Dashboard</h1>
+          <p style={{ color: "#666", marginTop: 0 }}>
+            Finnhub quotes + sentiment, layered over technical, whale, macro, and
+            political scoring
+          </p>
+        </div>
 
-      {/* TOP BAR */}
+        <button
+          onClick={handleLogout}
+          style={{
+            padding: "8px 12px",
+            borderRadius: 8,
+            border: "1px solid #d1d5db",
+            background: "#fff",
+            cursor: "pointer",
+          }}
+        >
+          Logout
+        </button>
+      </div>
+
       <div
         style={{
           marginTop: 20,
@@ -305,7 +444,6 @@ useEffect(() => {
           alignItems: "center",
         }}
       >
-
         <div>
           <input
             value={newSymbol}
@@ -324,8 +462,6 @@ useEffect(() => {
         </div>
       </div>
 
-
-      {/* MAIN GRID */}
       <div
         style={{
           marginTop: 20,
@@ -334,7 +470,6 @@ useEffect(() => {
           gap: 20,
         }}
       >
-        {/* LEFT PANEL */}
         <div
           style={{
             border: "1px solid #ddd",
@@ -343,20 +478,21 @@ useEffect(() => {
           }}
         >
           <h3>🎯 Selected Ticker</h3>
+
           <div style={{ marginBottom: 16 }}>
-  <canvas
-    ref={chartRef}
-    width={520}
-    height={180}
-    style={{
-      width: "100%",
-      height: 180,
-      border: "1px solid #e5e7eb",
-      borderRadius: 8,
-      background: "#ffffff",
-    }}
-  />
-</div>
+            <canvas
+              ref={chartRef}
+              width={520}
+              height={180}
+              style={{
+                width: "100%",
+                height: 180,
+                border: "1px solid #e5e7eb",
+                borderRadius: 8,
+                background: "#ffffff",
+              }}
+            />
+          </div>
 
           <select
             value={selectedSymbol}
@@ -411,7 +547,6 @@ useEffect(() => {
           </p>
         </div>
 
-        {/* RIGHT PANEL TABLE */}
         <div
           style={{
             border: "1px solid #ddd",
