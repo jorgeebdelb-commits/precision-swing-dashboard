@@ -1,14 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import {
   watchlist as initialWatchlist,
   type WatchlistItem,
 } from "./lib/watchlist";
+import { supabase } from "./lib/supabase";
 
-type EditableWatchlistItem = WatchlistItem & {
-  notes?: string[];
-};
+type Item = WatchlistItem;
 
 type QuoteResponse = {
   symbol: string;
@@ -20,113 +19,82 @@ type QuoteResponse = {
   open: number;
   previousClose: number;
   timestamp: number;
+  error?: string;
 };
 
-const toSafeNumber = (value: unknown, fallback = 0): number => {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
+type SentimentResponse = {
+  symbol: string;
+  sentimentScore: number;
+  newsCount: number;
+  error?: string;
 };
 
-const safeText = (value: unknown, fallback = "—"): string => {
-  if (value === null || value === undefined) return fallback;
-  const text = String(value).trim();
-  return text ? text : fallback;
+const num = (v: unknown, d = 0): number => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : d;
 };
 
-const thStyle: React.CSSProperties = {
-  textAlign: "left",
-  borderBottom: "1px solid #ccc",
-  padding: 8,
-};
-
-const tdStyle: React.CSSProperties = {
-  borderBottom: "1px solid #eee",
-  padding: 8,
-};
-
-const scoreCellStyle = (score: number): React.CSSProperties => {
-  const safeScore = toSafeNumber(score);
-
-  return {
-    borderBottom: "1px solid #eee",
-    padding: 8,
-    fontWeight: "bold",
-    color: safeScore >= 85 ? "green" : safeScore >= 70 ? "orange" : "red",
-  };
-};
+const clamp = (v: unknown): number => Math.max(0, Math.min(100, num(v)));
 
 export default function Dashboard() {
-  const [capital, setCapital] = useState(8000);
-  const [list, setList] = useState<EditableWatchlistItem[]>(initialWatchlist);
+    const [list, setList] = useState<Item[]>(initialWatchlist);
   const [selectedSymbol, setSelectedSymbol] = useState(
     initialWatchlist[0]?.symbol ?? ""
   );
   const [newSymbol, setNewSymbol] = useState("");
-  const [loadingQuote, setLoadingQuote] = useState(false);
-  const [loadingSentiment, setLoadingSentiment] = useState(false);
+
   const [quoteMessage, setQuoteMessage] = useState("");
   const [sentimentMessage, setSentimentMessage] = useState("");
 
-  const tradeSize = Math.min(2000, Math.max(1200, capital * 0.2));
+  const [loadingQuote, setLoadingQuote] = useState(false);
+  const [loadingSentiment, setLoadingSentiment] = useState(false);
+  const [adding, setAdding] = useState(false);
+const [history, setHistory] = useState<{ time: string; price: number }[]>([]);
+const chartRef = useRef<HTMLCanvasElement | null>(null);
 
   const selected = useMemo(() => {
-    return list.find((item) => item.symbol === selectedSymbol) ?? list[0] ?? null;
-  }, [selectedSymbol, list]);
+    return list.find((x) => x.symbol === selectedSymbol) ?? list[0];
+  }, [list, selectedSymbol]);
 
-  const getGrade = (score: number) => {
-    const safeScore = toSafeNumber(score);
-    if (safeScore >= 85) return "A";
-    if (safeScore >= 70) return "B";
-    return "C";
-  };
 
-  const getFinalScore = (item: EditableWatchlistItem) => {
-    const technical = toSafeNumber(item.technicalScore);
-    const whale = toSafeNumber(item.whaleScore);
-    const macro = toSafeNumber(item.macroScore);
-    const political = toSafeNumber(item.politicalScore);
-
-    return Math.round(
-      technical * 0.45 +
-        whale * 0.2 +
-        macro * 0.2 +
-        political * 0.15
+  const getScore = (x: Item) =>
+    Math.round(
+      clamp(x.technicalScore) * 0.45 +
+        clamp(x.whaleScore) * 0.2 +
+        clamp(x.macroScore) * 0.2 +
+        clamp(x.politicalScore) * 0.15
     );
-  };
 
-  const getFinalSignal = (score: number) => {
-    const safeScore = toSafeNumber(score);
-    if (safeScore >= 85) return "Strong Buy";
-    if (safeScore >= 75) return "Buy";
-    if (safeScore >= 65) return "Watch";
-    if (safeScore >= 55) return "Caution";
+  const getSignal = (score: number) => {
+    if (score >= 85) return "Strong Buy";
+    if (score >= 75) return "Buy";
+    if (score >= 65) return "Watch";
+    if (score >= 55) return "Caution";
     return "Avoid";
   };
 
-  const getSignalColor = (signal: string) => {
+  const getColor = (signal: string) => {
     if (signal === "Strong Buy" || signal === "Buy") return "green";
-    if (signal === "Watch") return "orange";
-    if (signal === "Caution") return "#cc8400";
+    if (signal === "Watch") return "#d97706";
+    if (signal === "Caution") return "#b45309";
     return "red";
   };
 
-  const getBiasColor = (bias: EditableWatchlistItem["bias"]) => {
-    if (bias === "Bullish") return "green";
-    if (bias === "Bearish") return "red";
-    return "orange";
-  };
-
-  const addSymbol = () => {
+  const addSymbol = async () => {
     const symbol = newSymbol.trim().toUpperCase();
     if (!symbol) return;
 
-    if (list.some((item) => item.symbol === symbol)) {
+    if (list.some((x) => x.symbol === symbol)) {
       setSelectedSymbol(symbol);
+      setQuoteMessage(`${symbol} already exists.`);
       setNewSymbol("");
       return;
     }
 
-    const newItem: EditableWatchlistItem = {
+    setAdding(true);
+    setQuoteMessage("");
+
+    const row: Item = {
       symbol,
       bias: "Watch",
       price: 0,
@@ -138,472 +106,387 @@ export default function Dashboard() {
       whaleScore: 60,
       macroScore: 60,
       politicalScore: 60,
-      notes: ["New symbol added manually", "Update live data and scores"],
+      notes: ["New symbol added"],
     };
 
-    setList((prev) => [...prev, newItem]);
-    setSelectedSymbol(symbol);
-    setNewSymbol("");
+    try {
+      const { error } = await supabase.from("watchlist").insert([
+        {
+          symbol: row.symbol,
+          bias: row.bias,
+          price: row.price,
+          support: row.support,
+          resistance: row.resistance,
+          rsi: row.rsi,
+          volumeRatio: row.volumeRatio,
+          technicalScore: row.technicalScore,
+          whaleScore: row.whaleScore,
+          macroScore: row.macroScore,
+          politicalScore: row.politicalScore,
+        },
+      ]);
+
+      if (error) {
+        setQuoteMessage(`Supabase error: ${error.message}`);
+        return;
+      }
+
+      setList((prev) => [...prev, row]);
+      setSelectedSymbol(symbol);
+      setNewSymbol("");
+      setQuoteMessage(`${symbol} added successfully.`);
+    } catch {
+      setQuoteMessage("Unexpected add error.");
+    } finally {
+      setAdding(false);
+    }
   };
 
-  const updateSelectedField = (
-    field: keyof EditableWatchlistItem,
-    value: string | number | string[]
-  ) => {
-    if (!selected) return;
-
-    setList((prev) =>
-      prev.map((item) =>
-        item.symbol === selected.symbol
-          ? {
-              ...item,
-              [field]: value,
-            }
-          : item
-      )
-    );
-  };
-
-  const getInputNumber = (value: string) => {
-    if (value.trim() === "") return 0;
-    return toSafeNumber(value, 0);
-  };
-
-  const refreshQuote = async () => {
-    if (!selected) return;
+  const refreshQuote = async (sym?: string) => {
+    const symbol = sym ?? selectedSymbol;
+    if (!symbol) return;
 
     setLoadingQuote(true);
-    setQuoteMessage("");
 
     try {
-      const response = await fetch(
-        `/api/finnhub/quote?symbol=${encodeURIComponent(selected.symbol)}`
+      const res = await fetch(
+        `/api/finnhub/quote?symbol=${encodeURIComponent(symbol)}`
       );
 
-      const data: QuoteResponse & { error?: string } = await response.json();
+      const data: QuoteResponse = await res.json();
 
-      if (!response.ok || data.error) {
-        throw new Error(data.error || "Quote fetch failed");
+      if (!res.ok || data.error) {
+        throw new Error();
       }
 
       setList((prev) =>
-        prev.map((item) =>
-          item.symbol === selected.symbol
+        prev.map((x) =>
+          x.symbol === symbol
             ? {
-                ...item,
-                price: toSafeNumber(data.price, item.price),
-                support:
-                  toSafeNumber(data.low) > 0 ? toSafeNumber(data.low) : item.support,
-                resistance:
-                  toSafeNumber(data.high) > 0
-                    ? toSafeNumber(data.high)
-                    : item.resistance,
-                notes: [
-                  ...(Array.isArray(item.notes) ? item.notes : []),
-                  `Live quote refreshed: ${new Date().toLocaleTimeString()}`,
-                ].slice(-6),
+                ...x,
+                price: num(data.price),
+                support: num(data.low, x.support),
+                resistance: num(data.high, x.resistance),
               }
-            : item
+            : x
         )
       );
 
-      setQuoteMessage("Live quote updated.");
-    } catch (err) {
-      console.error(err);
-      setQuoteMessage("Could not load live quote.");
+      setHistory((prev) => [
+  ...prev.slice(-29),
+  {
+    time: new Date().toLocaleTimeString(),
+    price: num(data.price),
+  },
+]);
+      setQuoteMessage(`Live quote updated for ${symbol}.`);
+    } catch {
+      setQuoteMessage(`Quote failed for ${symbol}.`);
     } finally {
       setLoadingQuote(false);
     }
   };
 
-  const refreshSentiment = async () => {
-    if (!selected) return;
+  const refreshSentiment = async (sym?: string) => {
+    const symbol = sym ?? selectedSymbol;
+    if (!symbol) return;
 
     setLoadingSentiment(true);
-    setSentimentMessage("");
 
     try {
-      const response = await fetch(
-        `/api/finnhub/sentiment?symbol=${encodeURIComponent(selected.symbol)}`
+      const res = await fetch(
+        `/api/finnhub/sentiment?symbol=${encodeURIComponent(symbol)}`
       );
 
-      const data = await response.json();
+      const data: SentimentResponse = await res.json();
 
-      if (!response.ok || data.error) {
-        throw new Error(data.error || "Sentiment fetch failed");
+      if (!res.ok || data.error) {
+        throw new Error();
       }
 
-      const sentimentScore = toSafeNumber(data.sentimentScore, 0);
-      const currentPolitical = toSafeNumber(selected.politicalScore, 60);
-
-      const adjustedPolitical =
-        sentimentScore >= 15
-          ? Math.min(100, currentPolitical + 5)
-          : sentimentScore <= 3
-          ? Math.max(0, currentPolitical - 5)
-          : currentPolitical;
-
       setList((prev) =>
-        prev.map((item) =>
-          item.symbol === selected.symbol
-            ? {
-                ...item,
-                politicalScore: adjustedPolitical,
-                notes: [
-                  `Sentiment refresh: ${toSafeNumber(data.newsCount, 0)} news items`,
-                  ...(Array.isArray(item.notes) ? item.notes : []),
-                ].slice(0, 6),
-              }
-            : item
-        )
+        prev.map((x) => {
+          if (x.symbol !== symbol) return x;
+
+          const p =
+            data.sentimentScore >= 15
+              ? Math.min(100, x.politicalScore + 5)
+              : data.sentimentScore <= 3
+              ? Math.max(0, x.politicalScore - 5)
+              : x.politicalScore;
+
+          return { ...x, politicalScore: p };
+        })
       );
 
-      setSentimentMessage("Sentiment updated.");
-    } catch (err) {
-      console.error(err);
-      setSentimentMessage("Could not load sentiment.");
+      setSentimentMessage(`Sentiment updated for ${symbol}.`);
+    } catch {
+      setSentimentMessage(`Sentiment failed for ${symbol}.`);
     } finally {
       setLoadingSentiment(false);
     }
   };
 
   useEffect(() => {
-    if (!selected) return;
+    if (!selectedSymbol) return;
 
-    void refreshQuote();
+    void refreshQuote(selectedSymbol);
 
-    const interval = setInterval(() => {
-      void refreshQuote();
+    const timer = setInterval(() => {
+      void refreshQuote(selectedSymbol);
     }, 10000);
 
-    return () => clearInterval(interval);
+    return () => clearInterval(timer);
   }, [selectedSymbol]);
+useEffect(() => {
+  const canvas = chartRef.current;
+  if (!canvas || history.length < 2) return;
 
-  if (!selected) {
-    return <div style={{ padding: 30 }}>No symbols loaded.</div>;
-  }
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
 
-  const finalScore = getFinalScore(selected);
-  const finalSignal = getFinalSignal(finalScore);
-  const safeNotes = Array.isArray(selected.notes) ? selected.notes : [];
+  const width = canvas.width;
+  const height = canvas.height;
+
+  ctx.clearRect(0, 0, width, height);
+
+  const prices = history.map((p) => p.price);
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  const range = max - min || 1;
+
+  const pad = 20;
+
+  ctx.beginPath();
+  ctx.strokeStyle = "#2563eb";
+  ctx.lineWidth = 2;
+
+  history.forEach((point, i) => {
+    const x = pad + (i / (history.length - 1)) * (width - pad * 2);
+    const y =
+      height - pad - ((point.price - min) / range) * (height - pad * 2);
+
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+
+  ctx.stroke();
+
+  ctx.fillStyle = "#111827";
+  ctx.font = "12px Arial";
+  ctx.fillText(`Low: ${min.toFixed(2)}`, 10, height - 6);
+  ctx.fillText(`High: ${max.toFixed(2)}`, width - 90, 14);
+}, [history]);
+  const score = getScore(selected);
+  const signal = getSignal(score);
 
   return (
     <div
       style={{
-        padding: 30,
+        padding: 24,
         fontFamily: "Arial, sans-serif",
-        maxWidth: 1200,
+        maxWidth: 1300,
         margin: "0 auto",
       }}
     >
       <h1>📊 Precision Swing Dashboard</h1>
-      <p style={{ color: "#555", marginTop: 6 }}>
-        Finnhub quotes + sentiment, layered over technical, whale, macro, and political scoring
+      <p style={{ color: "#666" }}>
+        Finnhub quotes + sentiment, layered over technical, whale, macro, and
+        political scoring
       </p>
 
-      <div style={{ marginTop: 20 }}>
-        <label>Capital: </label>
-        <input
-          type="number"
-          value={capital}
-          onChange={(e) => setCapital(getInputNumber(e.target.value))}
-          style={{ marginLeft: 10, padding: 6 }}
-        />
-      </div>
-
-      <div style={{ marginTop: 20 }}>
-        <h3>Add Ticker</h3>
-        <input
-          value={newSymbol}
-          onChange={(e) => setNewSymbol(e.target.value)}
-          placeholder="Enter symbol (e.g. TSLA)"
-          style={{ padding: 6, marginRight: 10 }}
-        />
-        <button onClick={addSymbol} style={{ padding: "6px 12px" }}>
-          Add
-        </button>
-      </div>
-
+      {/* TOP BAR */}
       <div
         style={{
-          marginTop: 30,
-          padding: 16,
-          border: "1px solid #ccc",
-          borderRadius: 8,
+          marginTop: 20,
+          display: "flex",
+          gap: 16,
+          flexWrap: "wrap",
+          alignItems: "center",
         }}
       >
-        <h2>💰 Trade Plan</h2>
-        <p>Total Allocation: ${Math.round(tradeSize)}</p>
-        <p>Shares: ${Math.round(tradeSize * 0.6)}</p>
-        <p>Options: ${Math.round(tradeSize * 0.4)}</p>
+
+        <div>
+          <input
+            value={newSymbol}
+            onChange={(e) => setNewSymbol(e.target.value)}
+            placeholder="Enter symbol (TSLA)"
+            style={{ padding: 6 }}
+          />
+
+          <button
+            onClick={addSymbol}
+            disabled={adding}
+            style={{ marginLeft: 8, padding: "6px 12px" }}
+          >
+            {adding ? "Adding..." : "Add"}
+          </button>
+        </div>
       </div>
 
+
+      {/* MAIN GRID */}
       <div
         style={{
-          marginTop: 30,
+          marginTop: 20,
           display: "grid",
-          gridTemplateColumns: "1.3fr 1fr",
+          gridTemplateColumns: "1fr 1fr",
           gap: 20,
         }}
       >
+        {/* LEFT PANEL */}
         <div
           style={{
-            padding: 16,
-            border: "1px solid #ccc",
+            border: "1px solid #ddd",
             borderRadius: 8,
+            padding: 16,
           }}
         >
-          <h2>🎯 Selected Ticker</h2>
+          <h3>🎯 Selected Ticker</h3>
+          <div style={{ marginBottom: 16 }}>
+  <canvas
+    ref={chartRef}
+    width={520}
+    height={180}
+    style={{
+      width: "100%",
+      height: 180,
+      border: "1px solid #e5e7eb",
+      borderRadius: 8,
+      background: "#ffffff",
+    }}
+  />
+</div>
+
+          <select
+            value={selectedSymbol}
+            onChange={(e) => setSelectedSymbol(e.target.value)}
+            style={{ padding: 6, marginBottom: 12 }}
+          >
+            {list.map((x) => (
+              <option key={x.symbol}>{x.symbol}</option>
+            ))}
+          </select>
 
           <div style={{ marginBottom: 12 }}>
-            <label>Choose ticker: </label>
-            <select
-              value={selectedSymbol}
-              onChange={(e) => setSelectedSymbol(e.target.value)}
-              style={{ marginLeft: 10, padding: 6 }}
-            >
-              {list.map((item) => (
-                <option key={item.symbol} value={item.symbol}>
-                  {item.symbol}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
-            <button onClick={refreshQuote} disabled={loadingQuote} style={{ padding: "6px 12px" }}>
-              {loadingQuote ? "Refreshing..." : "Refresh Quote"}
-            </button>
             <button
-              onClick={refreshSentiment}
-              disabled={loadingSentiment}
-              style={{ padding: "6px 12px" }}
+              onClick={() => void refreshQuote()}
+              disabled={loadingQuote}
+              style={{ padding: "6px 10px" }}
             >
-              {loadingSentiment ? "Refreshing..." : "Refresh Sentiment"}
+              {loadingQuote ? "Loading..." : "Refresh Quote"}
+            </button>
+
+            <button
+              onClick={() => void refreshSentiment()}
+              disabled={loadingSentiment}
+              style={{ padding: "6px 10px", marginLeft: 8 }}
+            >
+              {loadingSentiment ? "Loading..." : "Refresh Sentiment"}
             </button>
           </div>
 
-          {quoteMessage ? <p style={{ color: "#555" }}>{quoteMessage}</p> : null}
-          {sentimentMessage ? <p style={{ color: "#555" }}>{sentimentMessage}</p> : null}
+          <p>{quoteMessage}</p>
+          <p>{sentimentMessage}</p>
 
-          <p>
-            Bias:{" "}
-            <span style={{ color: getBiasColor(selected.bias), fontWeight: "bold" }}>
-              {safeText(selected.bias)}
-            </span>
-          </p>
-          <p>Price: ${toSafeNumber(selected.price)}</p>
-          <p>Support: ${toSafeNumber(selected.support)}</p>
-          <p>Resistance: ${toSafeNumber(selected.resistance)}</p>
-          <p>RSI: {toSafeNumber(selected.rsi)}</p>
-          <p>Volume Ratio: {toSafeNumber(selected.volumeRatio)}x</p>
-          <p>Technical Score: {toSafeNumber(selected.technicalScore)}</p>
-          <p>Whale Score: {toSafeNumber(selected.whaleScore)}</p>
-          <p>Macro Score: {toSafeNumber(selected.macroScore)}</p>
-          <p>Political Score: {toSafeNumber(selected.politicalScore)}</p>
-          <p>Final Score: {finalScore}</p>
-          <p>Setup Grade: {getGrade(finalScore)}</p>
-          <p>
-            Signal:{" "}
-            <span style={{ color: getSignalColor(finalSignal), fontWeight: "bold" }}>
-              {finalSignal}
-            </span>
-          </p>
+          <p><b>Bias:</b> {selected.bias}</p>
+          <p><b>Price:</b> ${selected.price.toFixed(2)}</p>
+          <p><b>Support:</b> ${selected.support.toFixed(2)}</p>
+          <p><b>Resistance:</b> ${selected.resistance.toFixed(2)}</p>
+          <p><b>RSI:</b> {selected.rsi}</p>
+          <p><b>Technical:</b> {selected.technicalScore}</p>
+          <p><b>Whale:</b> {selected.whaleScore}</p>
+          <p><b>Macro:</b> {selected.macroScore}</p>
+          <p><b>Political:</b> {selected.politicalScore}</p>
+          <p><b>Final Score:</b> {score}</p>
 
-          <div style={{ marginTop: 14 }}>
-            <strong>Notes:</strong>
-            {safeNotes.length > 0 ? (
-              <ul style={{ marginTop: 8 }}>
-                {safeNotes.map((note, index) => (
-                  <li key={`${selected.symbol}-note-${index}`}>{safeText(note)}</li>
-                ))}
-              </ul>
-            ) : (
-              <p style={{ marginTop: 8, color: "#666" }}>No notes yet.</p>
-            )}
-          </div>
+          <p
+            style={{
+              fontWeight: 700,
+              color: getColor(signal),
+              fontSize: 18,
+            }}
+          >
+            Signal: {signal}
+          </p>
         </div>
 
+        {/* RIGHT PANEL TABLE */}
         <div
           style={{
-            padding: 16,
-            border: "1px solid #ccc",
+            border: "1px solid #ddd",
             borderRadius: 8,
+            padding: 16,
           }}
         >
-          <h2>🛠️ Manual Driver Inputs</h2>
-          <p style={{ color: "#555", marginTop: 0 }}>
-            Live quote and sentiment are connected. Other drivers can still be adjusted manually.
-          </p>
+          <h3>📋 Watchlist</h3>
 
-          <div style={{ display: "grid", gap: 10 }}>
-            <label>
-              Price
-              <input
-                type="number"
-                value={toSafeNumber(selected.price)}
-                onChange={(e) => updateSelectedField("price", getInputNumber(e.target.value))}
-                style={{ display: "block", marginTop: 4, padding: 6, width: "100%" }}
-              />
-            </label>
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              fontSize: 14,
+            }}
+          >
+            <thead>
+              <tr style={{ background: "#f3f4f6" }}>
+                <th style={{ padding: 8, textAlign: "left" }}>Ticker</th>
+                <th style={{ padding: 8, textAlign: "right" }}>Price</th>
+                <th style={{ padding: 8, textAlign: "center" }}>Score</th>
+                <th style={{ padding: 8, textAlign: "center" }}>Signal</th>
+              </tr>
+            </thead>
 
-            <label>
-              Support
-              <input
-                type="number"
-                value={toSafeNumber(selected.support)}
-                onChange={(e) => updateSelectedField("support", getInputNumber(e.target.value))}
-                style={{ display: "block", marginTop: 4, padding: 6, width: "100%" }}
-              />
-            </label>
+            <tbody>
+              {list.map((x) => {
+                const s = getScore(x);
+                const sig = getSignal(s);
 
-            <label>
-              Resistance
-              <input
-                type="number"
-                value={toSafeNumber(selected.resistance)}
-                onChange={(e) =>
-                  updateSelectedField("resistance", getInputNumber(e.target.value))
-                }
-                style={{ display: "block", marginTop: 4, padding: 6, width: "100%" }}
-              />
-            </label>
-
-            <label>
-              RSI
-              <input
-                type="number"
-                value={toSafeNumber(selected.rsi)}
-                onChange={(e) => updateSelectedField("rsi", getInputNumber(e.target.value))}
-                style={{ display: "block", marginTop: 4, padding: 6, width: "100%" }}
-              />
-            </label>
-
-            <label>
-              Volume Ratio
-              <input
-                type="number"
-                step="0.1"
-                value={toSafeNumber(selected.volumeRatio)}
-                onChange={(e) =>
-                  updateSelectedField("volumeRatio", getInputNumber(e.target.value))
-                }
-                style={{ display: "block", marginTop: 4, padding: 6, width: "100%" }}
-              />
-            </label>
-
-            <label>
-              Technical Score
-              <input
-                type="number"
-                value={toSafeNumber(selected.technicalScore)}
-                onChange={(e) =>
-                  updateSelectedField("technicalScore", getInputNumber(e.target.value))
-                }
-                style={{ display: "block", marginTop: 4, padding: 6, width: "100%" }}
-              />
-            </label>
-
-            <label>
-              Whale Score
-              <input
-                type="number"
-                value={toSafeNumber(selected.whaleScore)}
-                onChange={(e) =>
-                  updateSelectedField("whaleScore", getInputNumber(e.target.value))
-                }
-                style={{ display: "block", marginTop: 4, padding: 6, width: "100%" }}
-              />
-            </label>
-
-            <label>
-              Macro Score
-              <input
-                type="number"
-                value={toSafeNumber(selected.macroScore)}
-                onChange={(e) =>
-                  updateSelectedField("macroScore", getInputNumber(e.target.value))
-                }
-                style={{ display: "block", marginTop: 4, padding: 6, width: "100%" }}
-              />
-            </label>
-
-            <label>
-              Political Score
-              <input
-                type="number"
-                value={toSafeNumber(selected.politicalScore)}
-                onChange={(e) =>
-                  updateSelectedField("politicalScore", getInputNumber(e.target.value))
-                }
-                style={{ display: "block", marginTop: 4, padding: 6, width: "100%" }}
-              />
-            </label>
-          </div>
-        </div>
-      </div>
-
-      <div
-        style={{
-          marginTop: 30,
-          padding: 16,
-          border: "1px solid #ccc",
-          borderRadius: 8,
-        }}
-      >
-        <h2>📋 Watchlist</h2>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
-          <thead>
-            <tr>
-              <th style={thStyle}>Ticker</th>
-              <th style={thStyle}>Bias</th>
-              <th style={thStyle}>Price</th>
-              <th style={thStyle}>Tech</th>
-              <th style={thStyle}>Whale</th>
-              <th style={thStyle}>Macro</th>
-              <th style={thStyle}>Political</th>
-              <th style={thStyle}>Final</th>
-              <th style={thStyle}>Grade</th>
-              <th style={thStyle}>Signal</th>
-            </tr>
-          </thead>
-          <tbody>
-            {list.map((item) => {
-              const safePrice = toSafeNumber(item.price);
-              const safeTechnical = toSafeNumber(item.technicalScore);
-              const safeWhale = toSafeNumber(item.whaleScore);
-              const safeMacro = toSafeNumber(item.macroScore);
-              const safePolitical = toSafeNumber(item.politicalScore);
-              const itemFinalScore = getFinalScore(item);
-              const itemSignal = getFinalSignal(itemFinalScore);
-
-              return (
-                <tr key={item.symbol}>
-                  <td style={tdStyle}>{safeText(item.symbol)}</td>
-                  <td style={{ ...tdStyle, color: getBiasColor(item.bias), fontWeight: "bold" }}>
-                    {safeText(item.bias)}
-                  </td>
-                  <td style={tdStyle}>${safePrice}</td>
-                  <td style={scoreCellStyle(safeTechnical)}>{safeTechnical}</td>
-                  <td style={scoreCellStyle(safeWhale)}>{safeWhale}</td>
-                  <td style={scoreCellStyle(safeMacro)}>{safeMacro}</td>
-                  <td style={scoreCellStyle(safePolitical)}>{safePolitical}</td>
-                  <td style={scoreCellStyle(itemFinalScore)}>{itemFinalScore}</td>
-                  <td style={tdStyle}>{getGrade(itemFinalScore)}</td>
-                  <td
-                    style={{
-                      ...tdStyle,
-                      color: getSignalColor(itemSignal),
-                      fontWeight: "bold",
-                    }}
+                return (
+                  <tr
+                    key={x.symbol}
+                    style={{ borderBottom: "1px solid #eee" }}
                   >
-                    {itemSignal}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+                    <td style={{ padding: 8, fontWeight: 600 }}>
+                      {x.symbol}
+                    </td>
+
+                    <td style={{ padding: 8, textAlign: "right" }}>
+                      ${x.price.toFixed(2)}
+                    </td>
+
+                    <td
+                      style={{
+                        padding: 8,
+                        textAlign: "center",
+                        fontWeight: 700,
+                        color:
+                          s >= 80
+                            ? "green"
+                            : s >= 65
+                            ? "#d97706"
+                            : "red",
+                      }}
+                    >
+                      {s}
+                    </td>
+
+                    <td
+                      style={{
+                        padding: 8,
+                        textAlign: "center",
+                        fontWeight: 700,
+                        color: getColor(sig),
+                      }}
+                    >
+                      {sig}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
