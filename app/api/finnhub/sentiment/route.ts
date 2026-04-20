@@ -1,5 +1,68 @@
 import { NextResponse } from "next/server";
 
+const positiveWords = [
+  "beat",
+  "beats",
+  "upgrade",
+  "upgraded",
+  "bullish",
+  "surge",
+  "strong",
+  "growth",
+  "record",
+  "profit",
+  "profits",
+  "buyback",
+  "partnership",
+  "expands",
+  "expansion",
+  "demand",
+  "outperform",
+  "wins",
+  "win",
+  "rebound",
+  "momentum",
+];
+
+const negativeWords = [
+  "miss",
+  "misses",
+  "downgrade",
+  "downgraded",
+  "bearish",
+  "drop",
+  "drops",
+  "weak",
+  "lawsuit",
+  "probe",
+  "investigation",
+  "cuts",
+  "cut",
+  "decline",
+  "loss",
+  "losses",
+  "delay",
+  "warning",
+  "risk",
+  "risks",
+  "pressure",
+];
+
+function scoreHeadline(text: string): number {
+  const lower = text.toLowerCase();
+  let score = 0;
+
+  for (const word of positiveWords) {
+    if (lower.includes(word)) score += 1;
+  }
+
+  for (const word of negativeWords) {
+    if (lower.includes(word)) score -= 1;
+  }
+
+  return score;
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -47,13 +110,35 @@ export async function GET(request: Request) {
     const news = await response.json();
     const newsItems = Array.isArray(news) ? news : [];
 
-    // Basic activity proxy, not true NLP sentiment
-    const sentimentScore = newsItems.length;
+    const scored = newsItems.slice(0, 20).map((item: any) => {
+      const headline = String(item?.headline ?? "");
+      return {
+        headline,
+        score: scoreHeadline(headline),
+      };
+    });
+
+    const rawScore = scored.reduce((sum, item) => sum + item.score, 0);
+
+    const sentimentScore = Math.max(
+      0,
+      Math.min(100, 50 + rawScore * 5 + Math.min(newsItems.length, 10))
+    );
+
+    const sentimentLabel =
+      sentimentScore >= 65
+        ? "Bullish"
+        : sentimentScore <= 40
+        ? "Bearish"
+        : "Neutral";
 
     return NextResponse.json({
       symbol,
       sentimentScore,
+      sentimentLabel,
       newsCount: newsItems.length,
+      rawScore,
+      topHeadlines: scored.slice(0, 5),
     });
   } catch (error) {
     console.error("SENTIMENT ROUTE ERROR:", error);
