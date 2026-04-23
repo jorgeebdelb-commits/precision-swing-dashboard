@@ -40,22 +40,22 @@ const clamp = (v: unknown): number => Math.max(0, Math.min(100, num(v)));
 
 export default function Dashboard() {
   const sitePassword = process.env.NEXT_PUBLIC_SITE_PASSWORD ?? "";
+
   const [authenticated, setAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
   const [loginError, setLoginError] = useState("");
 
-  const [list, setList] = useState<Item[]>(initialWatchlist);
-  const [selectedSymbol, setSelectedSymbol] = useState(
-    initialWatchlist[0]?.symbol ?? ""
-  );
+  const [list, setList] = useState<Item[]>([]);
+  const [selectedSymbol, setSelectedSymbol] = useState("");
   const [newSymbol, setNewSymbol] = useState("");
 
   const [quoteMessage, setQuoteMessage] = useState("");
   const [sentimentMessage, setSentimentMessage] = useState("");
-
   const [loadingQuote, setLoadingQuote] = useState(false);
   const [loadingSentiment, setLoadingSentiment] = useState(false);
+  const [loadingWatchlist, setLoadingWatchlist] = useState(true);
   const [adding, setAdding] = useState(false);
+  const [deletingSymbol, setDeletingSymbol] = useState<string | null>(null);
 
   const [history, setHistory] = useState<{ time: string; price: number }[]>([]);
   const chartRef = useRef<HTMLCanvasElement | null>(null);
@@ -65,6 +65,57 @@ export default function Dashboard() {
     if (unlocked === "true") {
       setAuthenticated(true);
     }
+  }, []);
+
+  useEffect(() => {
+    const loadWatchlist = async () => {
+      setLoadingWatchlist(true);
+
+      try {
+        const { data, error } = await supabase
+          .from("watchlist")
+          .select("*")
+          .order("created_at", { ascending: true });
+
+        if (error) {
+          console.error("Load watchlist error:", error);
+
+          if (initialWatchlist.length > 0) {
+            setList(initialWatchlist);
+            setSelectedSymbol(initialWatchlist[0].symbol);
+          }
+
+          return;
+        }
+
+        if (data && data.length > 0) {
+          const loaded: Item[] = data.map((row: any) => ({
+            symbol: row.symbol,
+            bias: row.bias ?? "Watch",
+            price: num(row.price),
+            support: num(row.support),
+            resistance: num(row.resistance),
+            rsi: num(row.rsi, 50),
+            volumeRatio: num(row.volumeRatio, 1),
+            technicalScore: num(row.technicalScore, 70),
+            whaleScore: num(row.whaleScore, 60),
+            macroScore: num(row.macroScore, 60),
+            politicalScore: num(row.politicalScore, 60),
+            notes: [],
+          }));
+
+          setList(loaded);
+          setSelectedSymbol((prev) => prev || loaded[0]?.symbol || "");
+        } else {
+          setList(initialWatchlist);
+          setSelectedSymbol(initialWatchlist[0]?.symbol ?? "");
+        }
+      } finally {
+        setLoadingWatchlist(false);
+      }
+    };
+
+    void loadWatchlist();
   }, []);
 
   const handleLogin = () => {
@@ -91,6 +142,7 @@ export default function Dashboard() {
   };
 
   const selected = useMemo(() => {
+    if (list.length === 0) return null;
     return list.find((x) => x.symbol === selectedSymbol) ?? list[0];
   }, [list, selectedSymbol]);
 
@@ -179,6 +231,40 @@ export default function Dashboard() {
     }
   };
 
+  const deleteSymbol = async (symbol: string) => {
+    setDeletingSymbol(symbol);
+    setQuoteMessage("");
+
+    try {
+      const { error } = await supabase
+        .from("watchlist")
+        .delete()
+        .eq("symbol", symbol);
+
+      if (error) {
+        setQuoteMessage(`Delete failed: ${error.message}`);
+        return;
+      }
+
+      setList((prev) => {
+        const updated = prev.filter((x) => x.symbol !== symbol);
+
+        if (selectedSymbol === symbol) {
+          setSelectedSymbol(updated[0]?.symbol ?? "");
+          setHistory([]);
+        }
+
+        return updated;
+      });
+
+      setQuoteMessage(`${symbol} deleted successfully.`);
+    } catch {
+      setQuoteMessage(`Unexpected delete error for ${symbol}.`);
+    } finally {
+      setDeletingSymbol(null);
+    }
+  };
+
   const refreshQuote = async (sym?: string) => {
     const symbol = sym ?? selectedSymbol;
     if (!symbol) return;
@@ -193,7 +279,7 @@ export default function Dashboard() {
       const data: QuoteResponse = await res.json();
 
       if (!res.ok || data.error) {
-        throw new Error();
+        throw new Error(data.error || "Quote request failed.");
       }
 
       setList((prev) =>
@@ -239,21 +325,22 @@ export default function Dashboard() {
       const data: SentimentResponse = await res.json();
 
       if (!res.ok || data.error) {
-        throw new Error();
+        throw new Error(data.error || "Sentiment request failed.");
       }
 
       setList((prev) =>
         prev.map((x) => {
           if (x.symbol !== symbol) return x;
 
-          const p =
-            num(data.sentimentScore) >= 65
+          const sentimentScore = num(data.sentimentScore);
+          const politicalScore =
+            sentimentScore >= 65
               ? Math.min(100, x.politicalScore + 5)
-              : num(data.sentimentScore) <= 40
+              : sentimentScore <= 40
               ? Math.max(0, x.politicalScore - 5)
               : x.politicalScore;
 
-          return { ...x, politicalScore: p };
+          return { ...x, politicalScore };
         })
       );
 
@@ -281,11 +368,11 @@ export default function Dashboard() {
     }, 10000);
 
     return () => clearInterval(timer);
-  }, [selectedSymbol, authenticated]);
+  }, [authenticated, selectedSymbol]);
 
   useEffect(() => {
     const canvas = chartRef.current;
-    if (!canvas || history.length < 2) return;
+    if (!canvas) return;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -294,6 +381,13 @@ export default function Dashboard() {
     const height = canvas.height;
 
     ctx.clearRect(0, 0, width, height);
+
+    if (history.length < 2) {
+      ctx.fillStyle = "#6b7280";
+      ctx.font = "14px Arial";
+      ctx.fillText("Waiting for live data...", 20, 40);
+      return;
+    }
 
     const prices = history.map((p) => p.price);
     const min = Math.min(...prices);
@@ -345,7 +439,9 @@ export default function Dashboard() {
             boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
           }}
         >
-          <h1 style={{ marginTop: 0, marginBottom: 8 }}>Precision Swing Dashboard</h1>
+          <h1 style={{ marginTop: 0, marginBottom: 8 }}>
+            Precision Swing Dashboard
+          </h1>
           <p style={{ color: "#6b7280", marginBottom: 20 }}>
             Enter password to access the web app.
           </p>
@@ -392,6 +488,41 @@ export default function Dashboard() {
     );
   }
 
+  if (loadingWatchlist) {
+    return (
+      <div style={{ padding: 24, fontFamily: "Arial, sans-serif" }}>
+        Loading watchlist...
+      </div>
+    );
+  }
+
+  if (!selected) {
+    return (
+      <div style={{ padding: 24, fontFamily: "Arial, sans-serif" }}>
+        <h1>📊 Precision Swing Dashboard</h1>
+        <p>No symbols found. Add a ticker to begin.</p>
+
+        <div style={{ marginTop: 16 }}>
+          <input
+            value={newSymbol}
+            onChange={(e) => setNewSymbol(e.target.value)}
+            placeholder="Enter symbol (TSLA)"
+            style={{ padding: 6 }}
+          />
+          <button
+            onClick={addSymbol}
+            disabled={adding}
+            style={{ marginLeft: 8, padding: "6px 12px" }}
+          >
+            {adding ? "Adding..." : "Add"}
+          </button>
+        </div>
+
+        <p style={{ marginTop: 12 }}>{quoteMessage}</p>
+      </div>
+    );
+  }
+
   const score = getScore(selected);
   const signal = getSignal(score);
 
@@ -416,7 +547,7 @@ export default function Dashboard() {
         <div>
           <h1 style={{ marginBottom: 6 }}>📊 Precision Swing Dashboard</h1>
           <p style={{ color: "#666", marginTop: 0 }}>
-            Finnhub quotes + sentiment, layered over technical, whale, macro, and
+            Finnhub quotes + sentiment layered over technical, whale, macro, and
             political scoring
           </p>
         </div>
@@ -466,7 +597,7 @@ export default function Dashboard() {
         style={{
           marginTop: 20,
           display: "grid",
-          gridTemplateColumns: "1fr 1fr",
+          gridTemplateColumns: "minmax(320px, 1fr) minmax(320px, 1fr)",
           gap: 20,
         }}
       >
@@ -500,7 +631,9 @@ export default function Dashboard() {
             style={{ padding: 6, marginBottom: 12 }}
           >
             {list.map((x) => (
-              <option key={x.symbol}>{x.symbol}</option>
+              <option key={x.symbol} value={x.symbol}>
+                {x.symbol}
+              </option>
             ))}
           </select>
 
@@ -569,6 +702,7 @@ export default function Dashboard() {
                 <th style={{ padding: 8, textAlign: "right" }}>Price</th>
                 <th style={{ padding: 8, textAlign: "center" }}>Score</th>
                 <th style={{ padding: 8, textAlign: "center" }}>Signal</th>
+                <th style={{ padding: 8, textAlign: "center" }}>Action</th>
               </tr>
             </thead>
 
@@ -578,11 +712,11 @@ export default function Dashboard() {
                 const sig = getSignal(s);
 
                 return (
-                  <tr
-                    key={x.symbol}
-                    style={{ borderBottom: "1px solid #eee" }}
-                  >
-                    <td style={{ padding: 8, fontWeight: 600 }}>
+                  <tr key={x.symbol} style={{ borderBottom: "1px solid #eee" }}>
+                    <td
+                      style={{ padding: 8, fontWeight: 600, cursor: "pointer" }}
+                      onClick={() => setSelectedSymbol(x.symbol)}
+                    >
                       {x.symbol}
                     </td>
 
@@ -596,11 +730,7 @@ export default function Dashboard() {
                         textAlign: "center",
                         fontWeight: 700,
                         color:
-                          s >= 80
-                            ? "green"
-                            : s >= 65
-                            ? "#d97706"
-                            : "red",
+                          s >= 80 ? "green" : s >= 65 ? "#d97706" : "red",
                       }}
                     >
                       {s}
@@ -615,6 +745,22 @@ export default function Dashboard() {
                       }}
                     >
                       {sig}
+                    </td>
+
+                    <td style={{ padding: 8, textAlign: "center" }}>
+                      <button
+                        onClick={() => void deleteSymbol(x.symbol)}
+                        disabled={deletingSymbol === x.symbol}
+                        style={{
+                          padding: "4px 8px",
+                          borderRadius: 6,
+                          border: "1px solid #d1d5db",
+                          background: "#fff",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {deletingSymbol === x.symbol ? "Deleting..." : "Delete"}
+                      </button>
                     </td>
                   </tr>
                 );
