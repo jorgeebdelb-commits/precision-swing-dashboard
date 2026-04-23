@@ -1,42 +1,81 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  watchlist as initialWatchlist,
-  type WatchlistItem,
-} from "./lib/watchlist";
+import type {
+  Item,
+  QuoteResponse,
+  SentimentResponse,
+  SortKey,
+} from "../types/dashboard";
+import { computeMetrics, type RowMetrics } from "../engines/strategy";
+import { watchlist as seedWatchlist } from "./lib/watchlist";
 import { supabase } from "./lib/supabase";
+import { num, upper } from "./lib/helpers";
 
-type Item = WatchlistItem;
-
-type QuoteResponse = {
-  symbol: string;
-  price: number;
-  change: number;
-  percentChange: number;
-  high: number;
-  low: number;
-  open: number;
-  previousClose: number;
-  timestamp: number;
-  error?: string;
+type RowData = {
+  item: Item;
+  metrics: RowMetrics;
 };
 
-type SentimentResponse = {
-  symbol: string;
-  sentimentScore: number;
-  newsCount: number;
-  sentimentLabel?: string;
-  rawScore?: number;
-  error?: string;
-};
+function glowColor(score: number) {
+  if (score >= 80) return "#22c55e";
+  if (score >= 65) return "#f59e0b";
+  return "#ef4444";
+}
 
-const num = (v: unknown, d = 0): number => {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : d;
-};
+function signalColor(signal: string) {
+  if (signal === "Strong Buy") return "#22c55e";
+  if (signal === "Buy") return "#4ade80";
+  if (signal === "Watch") return "#f59e0b";
+  if (signal === "Caution") return "#fb923c";
+  return "#ef4444";
+}
 
-const clamp = (v: unknown): number => Math.max(0, Math.min(100, num(v)));
+function riskColor(risk: "Low" | "Medium" | "High") {
+  if (risk === "Low") return "#22c55e";
+  if (risk === "Medium") return "#f59e0b";
+  return "#ef4444";
+}
+
+function softCard(signal?: string) {
+  const bg =
+    signal === "Strong Buy"
+      ? "linear-gradient(180deg, rgba(34,197,94,0.18), rgba(15,23,42,0.92))"
+      : signal === "Buy"
+      ? "linear-gradient(180deg, rgba(74,222,128,0.14), rgba(15,23,42,0.92))"
+      : signal === "Watch"
+      ? "linear-gradient(180deg, rgba(245,158,11,0.14), rgba(15,23,42,0.92))"
+      : signal === "Caution"
+      ? "linear-gradient(180deg, rgba(251,146,60,0.14), rgba(15,23,42,0.92))"
+      : "linear-gradient(180deg, rgba(239,68,68,0.14), rgba(15,23,42,0.92))";
+
+  return {
+    background: bg,
+    border: "1px solid rgba(148,163,184,0.18)",
+    borderRadius: 18,
+    boxShadow: "0 16px 48px rgba(2,6,23,0.34)",
+    backdropFilter: "blur(10px)",
+  } as const;
+}
+
+function panelStyle() {
+  return {
+    background: "rgba(15,23,42,0.78)",
+    border: "1px solid rgba(148,163,184,0.14)",
+    borderRadius: 18,
+    boxShadow: "0 16px 48px rgba(2,6,23,0.34)",
+    backdropFilter: "blur(12px)",
+  } as const;
+}
+
+function statCardStyle() {
+  return {
+    background: "rgba(30,41,59,0.72)",
+    border: "1px solid rgba(148,163,184,0.14)",
+    borderRadius: 14,
+    padding: 14,
+  } as const;
+}
 
 export default function Dashboard() {
   const sitePassword = process.env.NEXT_PUBLIC_SITE_PASSWORD ?? "";
@@ -45,31 +84,39 @@ export default function Dashboard() {
   const [passwordInput, setPasswordInput] = useState("");
   const [loginError, setLoginError] = useState("");
 
-  const [list, setList] = useState<Item[]>([]);
+  const [items, setItems] = useState<Item[]>([]);
   const [selectedSymbol, setSelectedSymbol] = useState("");
   const [newSymbol, setNewSymbol] = useState("");
 
-  const [quoteMessage, setQuoteMessage] = useState("");
-  const [sentimentMessage, setSentimentMessage] = useState("");
+  const [loading, setLoading] = useState(true);
   const [loadingQuote, setLoadingQuote] = useState(false);
   const [loadingSentiment, setLoadingSentiment] = useState(false);
-  const [loadingWatchlist, setLoadingWatchlist] = useState(true);
+  const [refreshingAll, setRefreshingAll] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [deletingSymbol, setDeletingSymbol] = useState<string | null>(null);
+  const [deletingSymbol, setDeletingSymbol] = useState("");
+
+  const [quoteMessage, setQuoteMessage] = useState("");
+  const [sentimentMessage, setSentimentMessage] = useState("");
+  const [lastRefresh, setLastRefresh] = useState("-");
+
+  const [quoteMeta, setQuoteMeta] = useState<QuoteResponse | null>(null);
+  const [sentimentMeta, setSentimentMeta] =
+    useState<SentimentResponse | null>(null);
 
   const [history, setHistory] = useState<{ time: string; price: number }[]>([]);
+  const [sortKey, setSortKey] = useState<SortKey>("opportunityScore");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+
   const chartRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
     const unlocked = localStorage.getItem("precision-dashboard-auth");
-    if (unlocked === "true") {
-      setAuthenticated(true);
-    }
+    if (unlocked === "true") setAuthenticated(true);
   }, []);
 
   useEffect(() => {
     const loadWatchlist = async () => {
-      setLoadingWatchlist(true);
+      setLoading(true);
 
       try {
         const { data, error } = await supabase
@@ -77,46 +124,121 @@ export default function Dashboard() {
           .select("*")
           .order("created_at", { ascending: true });
 
-        if (error) {
-          console.error("Load watchlist error:", error);
-
-          if (initialWatchlist.length > 0) {
-            setList(initialWatchlist);
-            setSelectedSymbol(initialWatchlist[0].symbol);
-          }
-
+        if (error || !data || data.length === 0) {
+          setItems(seedWatchlist);
+          setSelectedSymbol(seedWatchlist[0]?.symbol ?? "");
           return;
         }
 
-        if (data && data.length > 0) {
-          const loaded: Item[] = data.map((row: any) => ({
-            symbol: row.symbol,
-            bias: row.bias ?? "Watch",
-            price: num(row.price),
-            support: num(row.support),
-            resistance: num(row.resistance),
-            rsi: num(row.rsi, 50),
-            volumeRatio: num(row.volumeRatio, 1),
-            technicalScore: num(row.technicalScore, 70),
-            whaleScore: num(row.whaleScore, 60),
-            macroScore: num(row.macroScore, 60),
-            politicalScore: num(row.politicalScore, 60),
-            notes: [],
-          }));
+        const mapped: Item[] = data.map((row: any) => ({
+          symbol: row.symbol,
+          bias: row.bias ?? "Watch",
+          price: num(row.price),
+          support: num(row.support),
+          resistance: num(row.resistance),
+          rsi: num(row.rsi, 50),
+          volumeRatio: num(row.volumeRatio, 1),
+          technicalScore: num(row.technicalScore, 70),
+          whaleScore: num(row.whaleScore, 60),
+          macroScore: num(row.macroScore, 60),
+          politicalScore: num(row.politicalScore, 60),
+          notes: Array.isArray(row.notes) ? row.notes : [],
+        }));
 
-          setList(loaded);
-          setSelectedSymbol((prev) => prev || loaded[0]?.symbol || "");
-        } else {
-          setList(initialWatchlist);
-          setSelectedSymbol(initialWatchlist[0]?.symbol ?? "");
-        }
+        setItems(mapped);
+        setSelectedSymbol(mapped[0]?.symbol ?? "");
       } finally {
-        setLoadingWatchlist(false);
+        setLoading(false);
       }
     };
 
     void loadWatchlist();
   }, []);
+
+  const rows = useMemo<RowData[]>(
+    () =>
+      items.map((item) => ({
+        item,
+        metrics: computeMetrics(item),
+      })),
+    [items]
+  );
+
+  const selectedRow = useMemo(
+    () => rows.find((x) => x.item.symbol === selectedSymbol) ?? rows[0] ?? null,
+    [rows, selectedSymbol]
+  );
+
+  const selectedItem = selectedRow?.item ?? null;
+  const selectedMetrics = selectedRow?.metrics ?? null;
+
+  const hotRows = useMemo(() => rows.filter((x) => x.metrics.hotSetup), [rows]);
+  const redRows = useMemo(() => rows.filter((x) => x.metrics.redFlag), [rows]);
+
+  const topThree = useMemo(
+    () =>
+      [...rows]
+        .filter((x) => num(x.item.price) > 0)
+        .sort((a, b) => b.metrics.opportunityScore - a.metrics.opportunityScore)
+        .slice(0, 3),
+    [rows]
+  );
+
+  const avgSwing = useMemo(() => {
+    if (!rows.length) return 0;
+    return Math.round(
+      rows.reduce((sum, row) => sum + row.metrics.swing, 0) / rows.length
+    );
+  }, [rows]);
+
+  const avgOpportunity = useMemo(() => {
+    if (!rows.length) return 0;
+    return Math.round(
+      rows.reduce((sum, row) => sum + row.metrics.opportunityScore, 0) /
+        rows.length
+    );
+  }, [rows]);
+
+  const sortedRows = useMemo(() => {
+    const copy = [...rows];
+
+    const getValue = (row: RowData) => {
+      if (sortKey === "symbol") return row.item.symbol;
+      if (sortKey === "price") return row.item.price;
+      if (sortKey === "whaleV2") return row.metrics.whaleV2;
+      if (sortKey === "swing") return row.metrics.swing;
+      if (sortKey === "threeMonth") return row.metrics.threeMonth;
+      if (sortKey === "sixMonth") return row.metrics.sixMonth;
+      if (sortKey === "oneYear") return row.metrics.oneYear;
+      if (sortKey === "riskScore") return row.metrics.riskScore;
+      return row.metrics.opportunityScore;
+    };
+
+    copy.sort((a, b) => {
+      const av = getValue(a);
+      const bv = getValue(b);
+
+      if (typeof av === "string" && typeof bv === "string") {
+        return sortDirection === "asc"
+          ? av.localeCompare(bv)
+          : bv.localeCompare(av);
+      }
+
+      return sortDirection === "asc" ? num(av) - num(bv) : num(bv) - num(av);
+    });
+
+    return copy;
+  }, [rows, sortDirection, sortKey]);
+
+  const handleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+      return;
+    }
+
+    setSortKey(key);
+    setSortDirection(key === "symbol" ? "asc" : "desc");
+  };
 
   const handleLogin = () => {
     if (!sitePassword) {
@@ -127,58 +249,17 @@ export default function Dashboard() {
     if (passwordInput === sitePassword) {
       setAuthenticated(true);
       localStorage.setItem("precision-dashboard-auth", "true");
-      setLoginError("");
       setPasswordInput("");
+      setLoginError("");
       return;
     }
 
     setLoginError("Incorrect password.");
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem("precision-dashboard-auth");
-    setAuthenticated(false);
-    setPasswordInput("");
-  };
-
-  const selected = useMemo(() => {
-    if (list.length === 0) return null;
-    return list.find((x) => x.symbol === selectedSymbol) ?? list[0];
-  }, [list, selectedSymbol]);
-
-  const getScore = (x: Item) =>
-    Math.round(
-      clamp(x.technicalScore) * 0.45 +
-        clamp(x.whaleScore) * 0.2 +
-        clamp(x.macroScore) * 0.2 +
-        clamp(x.politicalScore) * 0.15
-    );
-
-  const getSignal = (score: number) => {
-    if (score >= 85) return "Strong Buy";
-    if (score >= 75) return "Buy";
-    if (score >= 65) return "Watch";
-    if (score >= 55) return "Caution";
-    return "Avoid";
-  };
-
-  const getColor = (signal: string) => {
-    if (signal === "Strong Buy" || signal === "Buy") return "green";
-    if (signal === "Watch") return "#d97706";
-    if (signal === "Caution") return "#b45309";
-    return "red";
-  };
-
   const addSymbol = async () => {
-    const symbol = newSymbol.trim().toUpperCase();
+    const symbol = upper(newSymbol);
     if (!symbol) return;
-
-    if (list.some((x) => x.symbol === symbol)) {
-      setSelectedSymbol(symbol);
-      setQuoteMessage(`${symbol} already exists.`);
-      setNewSymbol("");
-      return;
-    }
 
     setAdding(true);
     setQuoteMessage("");
@@ -199,41 +280,47 @@ export default function Dashboard() {
     };
 
     try {
-      const { error } = await supabase.from("watchlist").insert([
-        {
-          symbol: row.symbol,
-          bias: row.bias,
-          price: row.price,
-          support: row.support,
-          resistance: row.resistance,
-          rsi: row.rsi,
-          volumeRatio: row.volumeRatio,
-          technicalScore: row.technicalScore,
-          whaleScore: row.whaleScore,
-          macroScore: row.macroScore,
-          politicalScore: row.politicalScore,
-        },
-      ]);
+      const { error } = await supabase.from("watchlist").upsert(
+        [
+          {
+            symbol: row.symbol,
+            bias: row.bias,
+            price: row.price,
+            support: row.support,
+            resistance: row.resistance,
+            rsi: row.rsi,
+            volumeRatio: row.volumeRatio,
+            technicalScore: row.technicalScore,
+            whaleScore: row.whaleScore,
+            macroScore: row.macroScore,
+            politicalScore: row.politicalScore,
+            notes: row.notes,
+          },
+        ],
+        { onConflict: "symbol" }
+      );
 
       if (error) {
-        setQuoteMessage(`Supabase error: ${error.message}`);
+        setQuoteMessage(error.message);
         return;
       }
 
-      setList((prev) => [...prev, row]);
+      setItems((prev) => {
+        const exists = prev.some((x) => x.symbol === symbol);
+        if (exists) return prev;
+        return [...prev, row];
+      });
+
       setSelectedSymbol(symbol);
       setNewSymbol("");
-      setQuoteMessage(`${symbol} added successfully.`);
-    } catch {
-      setQuoteMessage("Unexpected add error.");
+      setQuoteMessage(`${symbol} saved.`);
     } finally {
       setAdding(false);
     }
   };
 
-  const deleteSymbol = async (symbol: string) => {
+  const removeSymbol = async (symbol: string) => {
     setDeletingSymbol(symbol);
-    setQuoteMessage("");
 
     try {
       const { error } = await supabase
@@ -242,26 +329,26 @@ export default function Dashboard() {
         .eq("symbol", symbol);
 
       if (error) {
-        setQuoteMessage(`Delete failed: ${error.message}`);
+        setQuoteMessage(error.message);
         return;
       }
 
-      setList((prev) => {
+      setItems((prev) => {
         const updated = prev.filter((x) => x.symbol !== symbol);
 
         if (selectedSymbol === symbol) {
           setSelectedSymbol(updated[0]?.symbol ?? "");
           setHistory([]);
+          setQuoteMeta(null);
+          setSentimentMeta(null);
         }
 
         return updated;
       });
 
-      setQuoteMessage(`${symbol} deleted successfully.`);
-    } catch {
-      setQuoteMessage(`Unexpected delete error for ${symbol}.`);
+      setQuoteMessage(`${symbol} deleted.`);
     } finally {
-      setDeletingSymbol(null);
+      setDeletingSymbol("");
     }
   };
 
@@ -279,79 +366,124 @@ export default function Dashboard() {
       const data: QuoteResponse = await res.json();
 
       if (!res.ok || data.error) {
-        throw new Error(data.error || "Quote request failed.");
+        setQuoteMessage("Quote failed.");
+        return;
       }
 
-      setList((prev) =>
+      setQuoteMeta(data);
+      setLastRefresh(new Date().toLocaleTimeString());
+
+      setItems((prev) =>
         prev.map((x) =>
           x.symbol === symbol
             ? {
                 ...x,
-                price: num(data.price),
+                price: num(data.price, x.price),
                 support: num(data.low, x.support),
                 resistance: num(data.high, x.resistance),
+                rsi:
+                  data.percentChange > 3
+                    ? 66
+                    : data.percentChange > 1
+                    ? 58
+                    : data.percentChange < -3
+                    ? 36
+                    : 47,
+                volumeRatio:
+                  Math.abs(num(data.percentChange)) > 4
+                    ? 2.1
+                    : Math.abs(num(data.percentChange)) > 2
+                    ? 1.7
+                    : Math.max(1.1, num(x.volumeRatio, 1)),
               }
             : x
         )
       );
 
+      await supabase
+        .from("watchlist")
+        .update({
+          price: num(data.price),
+          support: num(data.low),
+          resistance: num(data.high),
+        })
+        .eq("symbol", symbol);
+
       setHistory((prev) => [
-        ...prev.slice(-29),
+        ...prev.slice(-59),
         {
           time: new Date().toLocaleTimeString(),
           price: num(data.price),
         },
       ]);
 
-      setQuoteMessage(`Live quote updated for ${symbol}.`);
-    } catch {
-      setQuoteMessage(`Quote failed for ${symbol}.`);
+      setQuoteMessage(`${symbol} quote updated.`);
     } finally {
       setLoadingQuote(false);
     }
   };
 
-  const refreshSentiment = async (sym?: string) => {
-    const symbol = sym ?? selectedSymbol;
-    if (!symbol) return;
+  const refreshAll = async () => {
+    if (!items.length) return;
+
+    setRefreshingAll(true);
+    setQuoteMessage("Refreshing all quotes...");
+
+    try {
+      for (const row of items) {
+        await refreshQuote(row.symbol);
+      }
+      setQuoteMessage("All quotes refreshed.");
+    } finally {
+      setRefreshingAll(false);
+    }
+  };
+
+  const refreshSentiment = async () => {
+    if (!selectedSymbol) return;
 
     setLoadingSentiment(true);
 
     try {
       const res = await fetch(
-        `/api/finnhub/sentiment?symbol=${encodeURIComponent(symbol)}`
+        `/api/finnhub/sentiment?symbol=${encodeURIComponent(selectedSymbol)}`
       );
 
       const data: SentimentResponse = await res.json();
 
       if (!res.ok || data.error) {
-        throw new Error(data.error || "Sentiment request failed.");
+        setSentimentMessage("Sentiment failed.");
+        return;
       }
 
-      setList((prev) =>
+      setSentimentMeta(data);
+
+      setItems((prev) =>
         prev.map((x) => {
-          if (x.symbol !== symbol) return x;
+          if (x.symbol !== selectedSymbol) return x;
 
-          const sentimentScore = num(data.sentimentScore);
-          const politicalScore =
-            sentimentScore >= 65
-              ? Math.min(100, x.politicalScore + 5)
-              : sentimentScore <= 40
-              ? Math.max(0, x.politicalScore - 5)
-              : x.politicalScore;
-
-          return { ...x, politicalScore };
+          const s = num(data.sentimentScore);
+          return {
+            ...x,
+            politicalScore:
+              s >= 72
+                ? Math.min(100, x.politicalScore + 6)
+                : s <= 35
+                ? Math.max(0, x.politicalScore - 6)
+                : x.politicalScore,
+            technicalScore:
+              s >= 76
+                ? Math.min(100, x.technicalScore + 3)
+                : s <= 30
+                ? Math.max(0, x.technicalScore - 3)
+                : x.technicalScore,
+          };
         })
       );
 
-      const label = data.sentimentLabel ? ` (${data.sentimentLabel})` : "";
       setSentimentMessage(
-        `Sentiment updated for ${symbol}${label}. Score: ${num(
-          data.sentimentScore
-        )}`
+        `${selectedSymbol} sentiment: ${data.sentimentLabel} (${data.sentimentScore})`
       );
-    } catch {
-      setSentimentMessage(`Sentiment failed for ${symbol}.`);
     } finally {
       setLoadingSentiment(false);
     }
@@ -364,8 +496,10 @@ export default function Dashboard() {
     void refreshQuote(selectedSymbol);
 
     const timer = setInterval(() => {
-      void refreshQuote(selectedSymbol);
-    }, 10000);
+      if (document.visibilityState === "visible") {
+        void refreshQuote(selectedSymbol);
+      }
+    }, 15000);
 
     return () => clearInterval(timer);
   }, [authenticated, selectedSymbol]);
@@ -382,22 +516,38 @@ export default function Dashboard() {
 
     ctx.clearRect(0, 0, width, height);
 
+    const bg = ctx.createLinearGradient(0, 0, 0, height);
+    bg.addColorStop(0, "#0f172a");
+    bg.addColorStop(1, "#111827");
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, width, height);
+
     if (history.length < 2) {
-      ctx.fillStyle = "#6b7280";
+      ctx.fillStyle = "#94a3b8";
       ctx.font = "14px Arial";
-      ctx.fillText("Waiting for live data...", 20, 40);
+      ctx.fillText("Waiting for live data...", 24, 38);
       return;
     }
 
-    const prices = history.map((p) => p.price);
+    const prices = history.map((x) => x.price);
     const min = Math.min(...prices);
     const max = Math.max(...prices);
     const range = max - min || 1;
-    const pad = 20;
+    const pad = 24;
+
+    ctx.strokeStyle = "rgba(148,163,184,0.18)";
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 4; i++) {
+      const y = pad + (i / 3) * (height - pad * 2);
+      ctx.beginPath();
+      ctx.moveTo(pad, y);
+      ctx.lineTo(width - pad, y);
+      ctx.stroke();
+    }
 
     ctx.beginPath();
-    ctx.strokeStyle = "#2563eb";
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#38bdf8";
+    ctx.lineWidth = 2.4;
 
     history.forEach((point, i) => {
       const x = pad + (i / (history.length - 1)) * (width - pad * 2);
@@ -410,11 +560,38 @@ export default function Dashboard() {
 
     ctx.stroke();
 
-    ctx.fillStyle = "#111827";
+    const last = history[history.length - 1];
+    const lastX = width - pad;
+    const lastY =
+      height - pad - ((last.price - min) / range) * (height - pad * 2);
+
+    ctx.beginPath();
+    ctx.fillStyle = "#22c55e";
+    ctx.arc(lastX, lastY, 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#cbd5e1";
     ctx.font = "12px Arial";
-    ctx.fillText(`Low: ${min.toFixed(2)}`, 10, height - 6);
-    ctx.fillText(`High: ${max.toFixed(2)}`, width - 90, 14);
+    ctx.fillText(`Low ${min.toFixed(2)}`, 12, height - 8);
+    ctx.fillText(`High ${max.toFixed(2)}`, width - 92, 16);
   }, [history]);
+
+  const renderSortButton = (label: string, key: SortKey) => (
+    <button
+      onClick={() => handleSort(key)}
+      style={{
+        border: "none",
+        background: "transparent",
+        fontWeight: 800,
+        color: "#cbd5e1",
+        cursor: "pointer",
+        padding: 0,
+      }}
+    >
+      {label}
+      {sortKey === key ? (sortDirection === "asc" ? " ↑" : " ↓") : ""}
+    </button>
+  );
 
   if (!authenticated) {
     return (
@@ -423,43 +600,51 @@ export default function Dashboard() {
           minHeight: "100vh",
           display: "grid",
           placeItems: "center",
-          background: "#f8fafc",
           padding: 24,
+          background:
+            "radial-gradient(circle at top, #1e293b 0%, #0f172a 45%, #020617 100%)",
+          color: "#e2e8f0",
           fontFamily: "Arial, sans-serif",
         }}
       >
         <div
           style={{
             width: "100%",
-            maxWidth: 420,
-            background: "#ffffff",
-            border: "1px solid #e5e7eb",
-            borderRadius: 12,
-            padding: 24,
-            boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
+            maxWidth: 430,
+            padding: 28,
+            borderRadius: 20,
+            background: "rgba(15,23,42,0.82)",
+            border: "1px solid rgba(148,163,184,0.16)",
+            boxShadow: "0 24px 80px rgba(2,6,23,0.46)",
+            backdropFilter: "blur(12px)",
           }}
         >
-          <h1 style={{ marginTop: 0, marginBottom: 8 }}>
-            Precision Swing Dashboard
+          <div style={{ fontSize: 12, color: "#38bdf8", letterSpacing: 1.4 }}>
+            PRECISION SWING DASHBOARD V7.1
+          </div>
+
+          <h1 style={{ margin: "10px 0 8px 0", color: "#f8fafc" }}>
+            TradingView Hybrid
           </h1>
-          <p style={{ color: "#6b7280", marginBottom: 20 }}>
-            Enter password to access the web app.
+
+          <p style={{ color: "#94a3b8", marginTop: 0 }}>
+            Dark mode • smarter rankings • premium watchlist workflow
           </p>
 
           <input
             type="password"
             value={passwordInput}
             onChange={(e) => setPasswordInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleLogin();
-            }}
+            onKeyDown={(e) => e.key === "Enter" && handleLogin()}
             placeholder="Password"
             style={{
               width: "100%",
-              padding: 10,
-              borderRadius: 8,
-              border: "1px solid #d1d5db",
-              marginBottom: 12,
+              padding: 12,
+              marginTop: 12,
+              borderRadius: 12,
+              border: "1px solid rgba(148,163,184,0.18)",
+              background: "#0f172a",
+              color: "#fff",
               boxSizing: "border-box",
             }}
           />
@@ -468,180 +653,334 @@ export default function Dashboard() {
             onClick={handleLogin}
             style={{
               width: "100%",
-              padding: 10,
+              padding: 12,
+              marginTop: 12,
               border: "none",
-              borderRadius: 8,
-              background: "#111827",
-              color: "#ffffff",
-              fontWeight: 700,
+              borderRadius: 12,
+              background: "linear-gradient(90deg, #2563eb, #38bdf8)",
+              color: "#fff",
+              fontWeight: 800,
               cursor: "pointer",
+              boxShadow: "0 12px 32px rgba(37,99,235,0.34)",
             }}
           >
             Login
           </button>
 
           {loginError ? (
-            <p style={{ color: "red", marginTop: 12 }}>{loginError}</p>
+            <p style={{ color: "#f87171", marginTop: 12 }}>{loginError}</p>
           ) : null}
         </div>
       </div>
     );
   }
 
-  if (loadingWatchlist) {
+  if (loading) {
     return (
-      <div style={{ padding: 24, fontFamily: "Arial, sans-serif" }}>
+      <div
+        style={{
+          minHeight: "100vh",
+          background: "#020617",
+          color: "#e2e8f0",
+          display: "grid",
+          placeItems: "center",
+          fontFamily: "Arial, sans-serif",
+        }}
+      >
         Loading watchlist...
       </div>
     );
   }
 
-  if (!selected) {
+  if (!selectedItem || !selectedMetrics) {
     return (
-      <div style={{ padding: 24, fontFamily: "Arial, sans-serif" }}>
-        <h1>📊 Precision Swing Dashboard</h1>
-        <p>No symbols found. Add a ticker to begin.</p>
-
-        <div style={{ marginTop: 16 }}>
-          <input
-            value={newSymbol}
-            onChange={(e) => setNewSymbol(e.target.value)}
-            placeholder="Enter symbol (TSLA)"
-            style={{ padding: 6 }}
-          />
-          <button
-            onClick={addSymbol}
-            disabled={adding}
-            style={{ marginLeft: 8, padding: "6px 12px" }}
-          >
-            {adding ? "Adding..." : "Add"}
-          </button>
-        </div>
-
-        <p style={{ marginTop: 12 }}>{quoteMessage}</p>
+      <div
+        style={{
+          minHeight: "100vh",
+          background: "#020617",
+          color: "#e2e8f0",
+          display: "grid",
+          placeItems: "center",
+          fontFamily: "Arial, sans-serif",
+        }}
+      >
+        No symbols found.
       </div>
     );
   }
 
-  const score = getScore(selected);
-  const signal = getSignal(score);
-
   return (
     <div
       style={{
+        minHeight: "100vh",
         padding: 24,
-        fontFamily: "Arial, sans-serif",
-        maxWidth: 1300,
+        maxWidth: 1850,
         margin: "0 auto",
+        fontFamily: "Arial, sans-serif",
+        color: "#e2e8f0",
+        background:
+          "radial-gradient(circle at top, #1e293b 0%, #0f172a 42%, #020617 100%)",
       }}
     >
       <div
         style={{
+          ...panelStyle(),
+          padding: 20,
+          marginBottom: 18,
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          gap: 12,
+          gap: 16,
           flexWrap: "wrap",
         }}
       >
         <div>
-          <h1 style={{ marginBottom: 6 }}>📊 Precision Swing Dashboard</h1>
-          <p style={{ color: "#666", marginTop: 0 }}>
-            Finnhub quotes + sentiment layered over technical, whale, macro, and
-            political scoring
-          </p>
+          <div style={{ fontSize: 12, color: "#38bdf8", letterSpacing: 1.3 }}>
+            PRECISION SWING DASHBOARD V7.1
+          </div>
+          <h1 style={{ margin: "8px 0 6px 0", color: "#f8fafc" }}>
+            TradingView Hybrid
+          </h1>
+          <div style={{ color: "#94a3b8", fontSize: 13 }}>
+            Symbols: {items.length} • Last Refresh: {lastRefresh}
+          </div>
         </div>
 
         <button
-          onClick={handleLogout}
+          onClick={() => void refreshAll()}
+          disabled={refreshingAll}
           style={{
-            padding: "8px 12px",
-            borderRadius: 8,
-            border: "1px solid #d1d5db",
-            background: "#fff",
+            padding: "12px 18px",
+            borderRadius: 12,
+            border: "none",
             cursor: "pointer",
+            fontWeight: 800,
+            background: refreshingAll
+              ? "#475569"
+              : "linear-gradient(90deg, #2563eb, #38bdf8)",
+            color: "#fff",
+            boxShadow: "0 14px 36px rgba(37,99,235,0.28)",
           }}
         >
-          Logout
+          {refreshingAll ? "Refreshing..." : "Refresh All"}
         </button>
       </div>
 
       <div
         style={{
-          marginTop: 20,
+          ...panelStyle(),
+          padding: 16,
+          marginBottom: 18,
           display: "flex",
-          gap: 16,
+          gap: 10,
           flexWrap: "wrap",
           alignItems: "center",
         }}
       >
-        <div>
-          <input
-            value={newSymbol}
-            onChange={(e) => setNewSymbol(e.target.value)}
-            placeholder="Enter symbol (TSLA)"
-            style={{ padding: 6 }}
-          />
+        <input
+          value={newSymbol}
+          onChange={(e) => setNewSymbol(e.target.value)}
+          placeholder="Add symbol"
+          style={{
+            padding: 12,
+            borderRadius: 12,
+            border: "1px solid rgba(148,163,184,0.18)",
+            background: "#0f172a",
+            color: "#f8fafc",
+            minWidth: 190,
+          }}
+        />
 
-          <button
-            onClick={addSymbol}
-            disabled={adding}
-            style={{ marginLeft: 8, padding: "6px 12px" }}
-          >
-            {adding ? "Adding..." : "Add"}
-          </button>
+        <button
+          onClick={addSymbol}
+          disabled={adding}
+          style={{
+            padding: "12px 16px",
+            borderRadius: 12,
+            border: "none",
+            background: "#16a34a",
+            color: "#fff",
+            cursor: "pointer",
+            fontWeight: 800,
+          }}
+        >
+          {adding ? "Saving..." : "Save"}
+        </button>
+
+        <span style={{ color: "#94a3b8", fontSize: 13 }}>
+          {quoteMessage || sentimentMessage || "Opportunity score is the default ranking."}
+        </span>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4, minmax(180px, 1fr))",
+          gap: 14,
+          marginBottom: 18,
+        }}
+      >
+        <div style={{ ...panelStyle(), padding: 16 }}>
+          <div style={{ fontSize: 12, color: "#94a3b8" }}>Hot Setups</div>
+          <div style={{ fontSize: 30, fontWeight: 900, color: "#22c55e" }}>
+            {hotRows.length}
+          </div>
+        </div>
+
+        <div style={{ ...panelStyle(), padding: 16 }}>
+          <div style={{ fontSize: 12, color: "#94a3b8" }}>Red Flags</div>
+          <div style={{ fontSize: 30, fontWeight: 900, color: "#ef4444" }}>
+            {redRows.length}
+          </div>
+        </div>
+
+        <div style={{ ...panelStyle(), padding: 16 }}>
+          <div style={{ fontSize: 12, color: "#94a3b8" }}>Avg Swing</div>
+          <div style={{ fontSize: 30, fontWeight: 900, color: "#f8fafc" }}>
+            {avgSwing}
+          </div>
+        </div>
+
+        <div style={{ ...panelStyle(), padding: 16 }}>
+          <div style={{ fontSize: 12, color: "#94a3b8" }}>Avg Opportunity</div>
+          <div style={{ fontSize: 30, fontWeight: 900, color: "#38bdf8" }}>
+            {avgOpportunity}
+          </div>
         </div>
       </div>
 
       <div
         style={{
-          marginTop: 20,
           display: "grid",
-          gridTemplateColumns: "minmax(320px, 1fr) minmax(320px, 1fr)",
-          gap: 20,
+          gridTemplateColumns: "repeat(3, minmax(240px, 1fr))",
+          gap: 14,
+          marginBottom: 18,
         }}
       >
-        <div
-          style={{
-            border: "1px solid #ddd",
-            borderRadius: 8,
-            padding: 16,
-          }}
-        >
-          <h3>🎯 Selected Ticker</h3>
+        {(topThree.length ? topThree : rows.slice(0, 3)).map(
+          ({ item, metrics }, index) => (
+            <div
+              key={item.symbol}
+              onClick={() => setSelectedSymbol(item.symbol)}
+              style={{
+                ...softCard(metrics.swingSignal),
+                padding: 18,
+                cursor: "pointer",
+              }}
+            >
+              <div style={{ fontSize: 12, color: "#94a3b8" }}>
+                Spotlight #{index + 1}
+              </div>
+              <div
+                style={{
+                  marginTop: 6,
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 12,
+                }}
+              >
+                <div style={{ fontSize: 28, fontWeight: 900, color: "#f8fafc" }}>
+                  {item.symbol}
+                </div>
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: glowColor(metrics.opportunityScore),
+                    fontWeight: 800,
+                  }}
+                >
+                  {metrics.opportunityScore}
+                </div>
+              </div>
+              <div
+                style={{
+                  marginTop: 8,
+                  fontWeight: 800,
+                  color: signalColor(metrics.swingSignal),
+                }}
+              >
+                {metrics.swingSignal}
+              </div>
+              <div style={{ marginTop: 8, fontSize: 13, color: "#cbd5e1" }}>
+                {metrics.bestStrategy} • Entry {metrics.entryZone}
+              </div>
+            </div>
+          )
+        )}
+      </div>
 
-          <div style={{ marginBottom: 16 }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1.15fr 0.85fr",
+          gap: 18,
+        }}
+      >
+        <div style={{ ...panelStyle(), padding: 18 }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 12,
+              flexWrap: "wrap",
+              alignItems: "center",
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 12, color: "#94a3b8" }}>SELECTED TICKER</div>
+              <h2 style={{ margin: "6px 0 0 0", color: "#f8fafc" }}>
+                {selectedItem.symbol}
+              </h2>
+            </div>
+
+            <select
+              value={selectedSymbol}
+              onChange={(e) => setSelectedSymbol(e.target.value)}
+              style={{
+                padding: 12,
+                borderRadius: 12,
+                border: "1px solid rgba(148,163,184,0.18)",
+                background: "#0f172a",
+                color: "#f8fafc",
+              }}
+            >
+              {items.map((x) => (
+                <option key={x.symbol} value={x.symbol}>
+                  {x.symbol}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ marginTop: 18 }}>
             <canvas
               ref={chartRef}
-              width={520}
-              height={180}
+              width={760}
+              height={260}
               style={{
                 width: "100%",
-                height: 180,
-                border: "1px solid #e5e7eb",
-                borderRadius: 8,
-                background: "#ffffff",
+                height: 260,
+                border: "1px solid rgba(148,163,184,0.12)",
+                borderRadius: 16,
+                background: "#0f172a",
               }}
             />
           </div>
 
-          <select
-            value={selectedSymbol}
-            onChange={(e) => setSelectedSymbol(e.target.value)}
-            style={{ padding: 6, marginBottom: 12 }}
-          >
-            {list.map((x) => (
-              <option key={x.symbol} value={x.symbol}>
-                {x.symbol}
-              </option>
-            ))}
-          </select>
-
-          <div style={{ marginBottom: 12 }}>
+          <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
             <button
               onClick={() => void refreshQuote()}
               disabled={loadingQuote}
-              style={{ padding: "6px 10px" }}
+              style={{
+                padding: "11px 15px",
+                borderRadius: 12,
+                border: "none",
+                background: "#2563eb",
+                color: "#fff",
+                fontWeight: 800,
+                cursor: "pointer",
+              }}
             >
               {loadingQuote ? "Loading..." : "Refresh Quote"}
             </button>
@@ -649,125 +988,490 @@ export default function Dashboard() {
             <button
               onClick={() => void refreshSentiment()}
               disabled={loadingSentiment}
-              style={{ padding: "6px 10px", marginLeft: 8 }}
+              style={{
+                padding: "11px 15px",
+                borderRadius: 12,
+                border: "none",
+                background: "#7c3aed",
+                color: "#fff",
+                fontWeight: 800,
+                cursor: "pointer",
+              }}
             >
               {loadingSentiment ? "Loading..." : "Refresh Sentiment"}
             </button>
           </div>
 
-          <p>{quoteMessage}</p>
-          <p>{sentimentMessage}</p>
-
-          <p><b>Bias:</b> {selected.bias}</p>
-          <p><b>Price:</b> ${selected.price.toFixed(2)}</p>
-          <p><b>Support:</b> ${selected.support.toFixed(2)}</p>
-          <p><b>Resistance:</b> ${selected.resistance.toFixed(2)}</p>
-          <p><b>RSI:</b> {selected.rsi}</p>
-          <p><b>Technical:</b> {selected.technicalScore}</p>
-          <p><b>Whale:</b> {selected.whaleScore}</p>
-          <p><b>Macro:</b> {selected.macroScore}</p>
-          <p><b>Political:</b> {selected.politicalScore}</p>
-          <p><b>Final Score:</b> {score}</p>
-
-          <p
+          <div
             style={{
-              fontWeight: 700,
-              color: getColor(signal),
-              fontSize: 18,
+              marginTop: 16,
+              display: "grid",
+              gridTemplateColumns: "repeat(6, minmax(120px, 1fr))",
+              gap: 12,
             }}
           >
-            Signal: {signal}
-          </p>
+            {[
+              ["Price", `$${selectedItem.price.toFixed(2)}`, "#f8fafc"],
+              ["Whale V2", selectedMetrics.whaleV2, glowColor(selectedMetrics.whaleV2)],
+              ["Risk", selectedMetrics.riskLabel, riskColor(selectedMetrics.riskLabel)],
+              ["Regime", selectedMetrics.marketRegime, "#f8fafc"],
+              [
+                "Momentum",
+                selectedMetrics.momentumToday,
+                glowColor(selectedMetrics.momentumToday),
+              ],
+              ["Best", selectedMetrics.bestStrategy, "#38bdf8"],
+            ].map((card) => (
+              <div key={String(card[0])} style={statCardStyle()}>
+                <div style={{ fontSize: 12, color: "#94a3b8" }}>{card[0]}</div>
+                <div
+                  style={{
+                    marginTop: 4,
+                    fontWeight: 900,
+                    fontSize: 18,
+                    color: String(card[2]),
+                  }}
+                >
+                  {card[1]}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div
+            style={{
+              marginTop: 18,
+              display: "grid",
+              gridTemplateColumns: "repeat(4, minmax(150px, 1fr))",
+              gap: 12,
+            }}
+          >
+            {[
+              {
+                label: "Swing",
+                score: selectedMetrics.swing,
+                signal: selectedMetrics.swingSignal,
+                strategy: selectedMetrics.swingStrategy,
+              },
+              {
+                label: "3 Month",
+                score: selectedMetrics.threeMonth,
+                signal: selectedMetrics.threeMonthSignal,
+                strategy: selectedMetrics.threeMonthStrategy,
+              },
+              {
+                label: "6 Month",
+                score: selectedMetrics.sixMonth,
+                signal: selectedMetrics.sixMonthSignal,
+                strategy: selectedMetrics.sixMonthStrategy,
+              },
+              {
+                label: "1 Year",
+                score: selectedMetrics.oneYear,
+                signal: selectedMetrics.oneYearSignal,
+                strategy: selectedMetrics.oneYearStrategy,
+              },
+            ].map((card) => (
+              <div
+                key={card.label}
+                style={{
+                  ...softCard(card.signal),
+                  padding: 14,
+                }}
+              >
+                <div style={{ fontSize: 12, color: "#94a3b8" }}>{card.label}</div>
+                <div style={{ fontSize: 24, fontWeight: 900, color: "#f8fafc" }}>
+                  {card.score}
+                </div>
+                <div
+                  style={{
+                    marginTop: 4,
+                    fontWeight: 800,
+                    color: signalColor(card.signal),
+                  }}
+                >
+                  {card.signal}
+                </div>
+                <div style={{ marginTop: 8, fontSize: 13, color: "#cbd5e1" }}>
+                  {card.strategy}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div
+            style={{
+              marginTop: 18,
+              display: "grid",
+              gridTemplateColumns: "repeat(2, minmax(220px, 1fr))",
+              gap: 12,
+            }}
+          >
+            <div style={{ ...panelStyle(), padding: 16 }}>
+              <h4 style={{ marginTop: 0, color: "#f8fafc" }}>Trade Plan</h4>
+              <p><b>Entry Zone:</b> {selectedMetrics.entryZone}</p>
+              <p><b>Stop Loss:</b> {selectedMetrics.stopLoss}</p>
+              <p><b>Target 1:</b> {selectedMetrics.target1}</p>
+              <p><b>Target 2:</b> {selectedMetrics.target2}</p>
+              <p><b>Position Size:</b> {selectedMetrics.positionSizing}</p>
+            </div>
+
+            <div style={{ ...panelStyle(), padding: 16 }}>
+              <h4 style={{ marginTop: 0, color: "#f8fafc" }}>Options Engine</h4>
+              <p><b>Calls:</b> {selectedMetrics.callPlan}</p>
+              <p><b>Puts:</b> {selectedMetrics.putPlan}</p>
+              <p><b>Session:</b> {quoteMeta?.session ?? "-"}</p>
+              <p><b>Trend:</b> {quoteMeta?.trend ?? "-"}</p>
+              <p><b>Day Range %:</b> {num(quoteMeta?.dayRangePercent).toFixed(2)}</p>
+            </div>
+          </div>
+
+          {selectedMetrics.notes.length ? (
+            <div
+              style={{
+                marginTop: 16,
+                padding: 14,
+                borderRadius: 14,
+                background: "rgba(30,41,59,0.72)",
+                border: "1px solid rgba(148,163,184,0.14)",
+              }}
+            >
+              <b style={{ color: "#f8fafc" }}>Model Notes</b>
+              <ul style={{ marginBottom: 0, color: "#cbd5e1" }}>
+                {selectedMetrics.notes.map((note, idx) => (
+                  <li key={idx}>{note}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </div>
 
-        <div
+        <div style={{ display: "grid", gap: 18 }}>
+          <div style={{ ...panelStyle(), padding: 18 }}>
+            <h3 style={{ marginTop: 0, color: "#f8fafc" }}>Catalysts & Headlines</h3>
+
+            {sentimentMeta?.topHeadlines?.length ? (
+              <div>
+                {sentimentMeta.topHeadlines.slice(0, 5).map((x, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      padding: "12px 0",
+                      borderBottom: "1px solid rgba(148,163,184,0.1)",
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, color: "#e2e8f0" }}>
+                      {x.headline}
+                    </div>
+                    <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 4 }}>
+                      {x.source ?? ""} {x.score ? `• Score ${x.score}` : ""}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p style={{ color: "#94a3b8" }}>
+                Refresh sentiment to load headline analysis.
+              </p>
+            )}
+          </div>
+
+          <div style={{ ...panelStyle(), padding: 18 }}>
+            <h3 style={{ marginTop: 0, color: "#f8fafc" }}>Hot Setups</h3>
+            {hotRows.length ? (
+              hotRows.slice(0, 5).map(({ item, metrics }) => (
+                <div
+                  key={item.symbol}
+                  onClick={() => setSelectedSymbol(item.symbol)}
+                  style={{
+                    padding: "10px 0",
+                    borderBottom: "1px solid rgba(148,163,184,0.1)",
+                    cursor: "pointer",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 12,
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 800, color: "#f8fafc" }}>{item.symbol}</div>
+                    <div style={{ fontSize: 12, color: "#94a3b8" }}>
+                      {metrics.swingSignal} • {metrics.bestStrategy}
+                    </div>
+                  </div>
+                  <div style={{ fontWeight: 800, color: "#22c55e" }}>
+                    {metrics.opportunityScore}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p style={{ color: "#94a3b8" }}>No hot setups yet.</p>
+            )}
+          </div>
+
+          <div style={{ ...panelStyle(), padding: 18 }}>
+            <h3 style={{ marginTop: 0, color: "#f8fafc" }}>Red Flags</h3>
+            {redRows.length ? (
+              redRows.slice(0, 5).map(({ item, metrics }) => (
+                <div
+                  key={item.symbol}
+                  onClick={() => setSelectedSymbol(item.symbol)}
+                  style={{
+                    padding: "10px 0",
+                    borderBottom: "1px solid rgba(148,163,184,0.1)",
+                    cursor: "pointer",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 12,
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 800, color: "#f8fafc" }}>{item.symbol}</div>
+                    <div style={{ fontSize: 12, color: "#94a3b8" }}>
+                      {metrics.notes[0] ?? "Needs review"}
+                    </div>
+                  </div>
+                  <div style={{ fontWeight: 800, color: "#ef4444" }}>
+                    {metrics.riskLabel}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p style={{ color: "#94a3b8" }}>No major red flags detected.</p>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div
+        style={{
+          ...panelStyle(),
+          padding: 18,
+          marginTop: 18,
+          overflowX: "auto",
+        }}
+      >
+        <h3 style={{ marginTop: 0, color: "#f8fafc" }}>Sortable Opportunities</h3>
+
+        <table
           style={{
-            border: "1px solid #ddd",
-            borderRadius: 8,
-            padding: 16,
+            width: "100%",
+            borderCollapse: "collapse",
+            fontSize: 13,
+            minWidth: 1750,
+            color: "#e2e8f0",
           }}
         >
-          <h3>📋 Watchlist</h3>
+          <thead>
+            <tr style={{ background: "rgba(30,41,59,0.72)" }}>
+              <th style={{ padding: 9, textAlign: "left" }}>
+                {renderSortButton("Ticker", "symbol")}
+              </th>
+              <th style={{ padding: 9, textAlign: "right" }}>
+                {renderSortButton("Price", "price")}
+              </th>
+              <th style={{ padding: 9, textAlign: "center" }}>
+                {renderSortButton("Opp Score", "opportunityScore")}
+              </th>
+              <th style={{ padding: 9, textAlign: "center" }}>
+                {renderSortButton("Whale V2", "whaleV2")}
+              </th>
+              <th style={{ padding: 9, textAlign: "center" }}>
+                {renderSortButton("Swing", "swing")}
+              </th>
+              <th style={{ padding: 9, textAlign: "center" }}>Swing Strategy</th>
+              <th style={{ padding: 9, textAlign: "center" }}>
+                {renderSortButton("3M", "threeMonth")}
+              </th>
+              <th style={{ padding: 9, textAlign: "center" }}>3M Strategy</th>
+              <th style={{ padding: 9, textAlign: "center" }}>
+                {renderSortButton("6M", "sixMonth")}
+              </th>
+              <th style={{ padding: 9, textAlign: "center" }}>6M Strategy</th>
+              <th style={{ padding: 9, textAlign: "center" }}>
+                {renderSortButton("1Y", "oneYear")}
+              </th>
+              <th style={{ padding: 9, textAlign: "center" }}>1Y Strategy</th>
+              <th style={{ padding: 9, textAlign: "center" }}>Entry</th>
+              <th style={{ padding: 9, textAlign: "center" }}>Stop</th>
+              <th style={{ padding: 9, textAlign: "center" }}>T1</th>
+              <th style={{ padding: 9, textAlign: "center" }}>
+                {renderSortButton("Risk", "riskScore")}
+              </th>
+              <th style={{ padding: 9, textAlign: "center" }}>Hot</th>
+              <th style={{ padding: 9, textAlign: "center" }}>Best</th>
+              <th style={{ padding: 9, textAlign: "center" }}>Action</th>
+            </tr>
+          </thead>
 
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              fontSize: 14,
-            }}
-          >
-            <thead>
-              <tr style={{ background: "#f3f4f6" }}>
-                <th style={{ padding: 8, textAlign: "left" }}>Ticker</th>
-                <th style={{ padding: 8, textAlign: "right" }}>Price</th>
-                <th style={{ padding: 8, textAlign: "center" }}>Score</th>
-                <th style={{ padding: 8, textAlign: "center" }}>Signal</th>
-                <th style={{ padding: 8, textAlign: "center" }}>Action</th>
+          <tbody>
+            {sortedRows.map(({ item, metrics }) => (
+              <tr
+                key={item.symbol}
+                style={{
+                  borderBottom: "1px solid rgba(148,163,184,0.09)",
+                  background:
+                    item.symbol === selectedSymbol
+                      ? "rgba(37,99,235,0.10)"
+                      : "transparent",
+                  opacity: num(item.price) <= 0 ? 0.7 : 1,
+                }}
+              >
+                <td
+                  style={{
+                    padding: 9,
+                    fontWeight: 800,
+                    cursor: "pointer",
+                    color: "#f8fafc",
+                  }}
+                  onClick={() => setSelectedSymbol(item.symbol)}
+                >
+                  {item.symbol}
+                </td>
+
+                <td style={{ padding: 9, textAlign: "right" }}>
+                  ${num(item.price).toFixed(2)}
+                </td>
+
+                <td
+                  style={{
+                    padding: 9,
+                    textAlign: "center",
+                    fontWeight: 900,
+                    color: glowColor(metrics.opportunityScore),
+                  }}
+                >
+                  {metrics.opportunityScore}
+                </td>
+
+                <td
+                  style={{
+                    padding: 9,
+                    textAlign: "center",
+                    fontWeight: 900,
+                    color: glowColor(metrics.whaleV2),
+                  }}
+                >
+                  {metrics.whaleV2}
+                </td>
+
+                <td
+                  style={{
+                    padding: 9,
+                    textAlign: "center",
+                    fontWeight: 900,
+                    color: signalColor(metrics.swingSignal),
+                  }}
+                >
+                  {metrics.swingSignal} ({metrics.swing})
+                </td>
+
+                <td style={{ padding: 9, textAlign: "center" }}>
+                  {metrics.swingStrategy}
+                </td>
+
+                <td
+                  style={{
+                    padding: 9,
+                    textAlign: "center",
+                    fontWeight: 900,
+                    color: signalColor(metrics.threeMonthSignal),
+                  }}
+                >
+                  {metrics.threeMonthSignal} ({metrics.threeMonth})
+                </td>
+
+                <td style={{ padding: 9, textAlign: "center" }}>
+                  {metrics.threeMonthStrategy}
+                </td>
+
+                <td
+                  style={{
+                    padding: 9,
+                    textAlign: "center",
+                    fontWeight: 900,
+                    color: signalColor(metrics.sixMonthSignal),
+                  }}
+                >
+                  {metrics.sixMonthSignal} ({metrics.sixMonth})
+                </td>
+
+                <td style={{ padding: 9, textAlign: "center" }}>
+                  {metrics.sixMonthStrategy}
+                </td>
+
+                <td
+                  style={{
+                    padding: 9,
+                    textAlign: "center",
+                    fontWeight: 900,
+                    color: signalColor(metrics.oneYearSignal),
+                  }}
+                >
+                  {metrics.oneYearSignal} ({metrics.oneYear})
+                </td>
+
+                <td style={{ padding: 9, textAlign: "center" }}>
+                  {metrics.oneYearStrategy}
+                </td>
+
+                <td style={{ padding: 9, textAlign: "center" }}>
+                  {metrics.entryZone}
+                </td>
+
+                <td style={{ padding: 9, textAlign: "center" }}>
+                  {metrics.stopLoss}
+                </td>
+
+                <td style={{ padding: 9, textAlign: "center" }}>
+                  {metrics.target1}
+                </td>
+
+                <td
+                  style={{
+                    padding: 9,
+                    textAlign: "center",
+                    fontWeight: 900,
+                    color: riskColor(metrics.riskLabel),
+                  }}
+                >
+                  {metrics.riskLabel} ({metrics.riskScore})
+                </td>
+
+                <td
+                  style={{
+                    padding: 9,
+                    textAlign: "center",
+                    fontWeight: 900,
+                    color: metrics.hotSetup ? "#22c55e" : "#64748b",
+                  }}
+                >
+                  {metrics.hotSetup ? "Yes" : "No"}
+                </td>
+
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 800 }}>
+                  {metrics.bestStrategy}
+                </td>
+
+                <td style={{ padding: 9, textAlign: "center" }}>
+                  <button
+                    onClick={() => void removeSymbol(item.symbol)}
+                    disabled={deletingSymbol === item.symbol}
+                    style={{
+                      padding: "6px 10px",
+                      borderRadius: 8,
+                      border: "1px solid rgba(148,163,184,0.18)",
+                      background: "#0f172a",
+                      color: "#e2e8f0",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {deletingSymbol === item.symbol ? "Deleting..." : "Delete"}
+                  </button>
+                </td>
               </tr>
-            </thead>
-
-            <tbody>
-              {list.map((x) => {
-                const s = getScore(x);
-                const sig = getSignal(s);
-
-                return (
-                  <tr key={x.symbol} style={{ borderBottom: "1px solid #eee" }}>
-                    <td
-                      style={{ padding: 8, fontWeight: 600, cursor: "pointer" }}
-                      onClick={() => setSelectedSymbol(x.symbol)}
-                    >
-                      {x.symbol}
-                    </td>
-
-                    <td style={{ padding: 8, textAlign: "right" }}>
-                      ${x.price.toFixed(2)}
-                    </td>
-
-                    <td
-                      style={{
-                        padding: 8,
-                        textAlign: "center",
-                        fontWeight: 700,
-                        color:
-                          s >= 80 ? "green" : s >= 65 ? "#d97706" : "red",
-                      }}
-                    >
-                      {s}
-                    </td>
-
-                    <td
-                      style={{
-                        padding: 8,
-                        textAlign: "center",
-                        fontWeight: 700,
-                        color: getColor(sig),
-                      }}
-                    >
-                      {sig}
-                    </td>
-
-                    <td style={{ padding: 8, textAlign: "center" }}>
-                      <button
-                        onClick={() => void deleteSymbol(x.symbol)}
-                        disabled={deletingSymbol === x.symbol}
-                        style={{
-                          padding: "4px 8px",
-                          borderRadius: 6,
-                          border: "1px solid #d1d5db",
-                          background: "#fff",
-                          cursor: "pointer",
-                        }}
-                      >
-                        {deletingSymbol === x.symbol ? "Deleting..." : "Delete"}
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
