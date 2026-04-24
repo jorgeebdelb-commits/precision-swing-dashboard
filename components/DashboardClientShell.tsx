@@ -213,7 +213,13 @@ export default function DashboardClientShell() {
 
   const redRows = useMemo(() => rows.filter((x) => x.metrics.redFlag), [rows]);
   const unknownRiskRows = useMemo(
-    () => rows.filter((x) => x.metrics.riskLabel === "Unknown"),
+    () =>
+      rows.filter(
+        (x) =>
+          x.item.atrPercent === undefined ||
+          x.item.priceVolatility === undefined ||
+          x.item.betaProxy === undefined
+      ),
     [rows]
   );
 
