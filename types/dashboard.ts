@@ -34,11 +34,11 @@ export type SentimentResponse = {
 };
 
 export type Strategy =
-  | "Buy Calls"
-  | "Buy Shares"
-  | "Buy Shares + Calls"
-  | "Watch / Starter"
-  | "Watch / Avoid";
+  | "Calls Only"
+  | "Shares + Calls"
+  | "Shares Only"
+  | "Starter Size"
+  | "No Trade";
 
 export type HorizonKey =
   | "swing"
@@ -58,8 +58,7 @@ export type SortKey =
   | "sixMonth"
   | "oneYear"
   | "riskScore"
-  | "confidence"
-  | "bestStrategy";
+  | "confidence";
 
 export type MarketRegime =
   | "Risk-On"

@@ -80,7 +80,7 @@ export type RowMetrics = {
   threeMonthStrategy: Strategy;
   sixMonthStrategy: Strategy;
   oneYearStrategy: Strategy;
-  bestStrategy: Strategy;
+  confidenceLabel: "Low" | "Medium" | "High";
   marketRegime: MarketRegime;
   opportunityScore: number;
   entryZone: string;
@@ -97,7 +97,6 @@ export type RowMetrics = {
 };
 
 const HIGH_BETA_SYMBOLS = new Set(["TSLA", "MARA", "RIVN", "IREN", "RGTI", "COIN"]);
-const STRONG_NAMES = new Set(["AMD", "NVDA", "AMZN"]);
 const TICKER_CLASSES: Record<string, TickerClass> = {
   AMZN: "MegaCapTech",
   NVDA: "MegaCapTech",
@@ -498,13 +497,10 @@ function weightedHorizonScore(horizon: HorizonKey, pillars: PillarScores, profil
 
 function callsAllowed(
   score: number,
-  riskLabel: RiskLabel,
   technicals: TechnicalFactors
 ): boolean {
   return (
     score >= 8 &&
-    riskLabel !== "High" &&
-    riskLabel !== "Extreme" &&
     technicals.atrPercent <= 7.5 &&
     technicals.volatilityPercent <= 9 &&
     technicals.trendAligned
@@ -517,19 +513,31 @@ export function getStrategy(
   riskLabel: RiskLabel,
   technicals: TechnicalFactors
 ): Strategy {
-  const allowCalls = callsAllowed(score, riskLabel, technicals);
+  const allowCalls = callsAllowed(score, technicals) && riskLabel !== "High" && riskLabel !== "Extreme";
 
-  if (horizon === "swing" && score >= 8.8 && riskLabel === "Low" && technicals.lr50Slope > 0.35) {
-    return "Buy Calls";
+  if (horizon === "swing") {
+    if (score >= 8.6 && allowCalls) return "Shares + Calls";
+    if (score >= 7) return "Shares Only";
+    if (score >= 5.6) return "Starter Size";
+    return "No Trade";
   }
 
-  if (score >= 8.05 && riskLabel !== "High" && riskLabel !== "Extreme") {
-    return allowCalls ? "Buy Shares + Calls" : "Buy Shares";
+  if (horizon === "threeMonth") {
+    if (score >= 8.4) return "Shares Only";
+    if (score >= 6.2) return "Starter Size";
+    if (score >= 5.4) return "Shares Only";
+    return "No Trade";
   }
 
-  if (score >= 7.25 && riskLabel !== "Extreme") return "Buy Shares";
-  if (score >= 6.1) return "Watch / Starter";
-  return "Watch / Avoid";
+  if (horizon === "sixMonth") {
+    if (score >= 8.2) return "Shares Only";
+    if (score >= 6.4) return "Starter Size";
+    return "No Trade";
+  }
+
+  if (score >= 8) return "Shares Only";
+  if (score >= 6.5) return "Starter Size";
+  return "No Trade";
 }
 
 export function getMarketRegime(
@@ -588,7 +596,7 @@ export function computeTradePlan(
     positionSizing = "1%-3% tactical";
 
   const callPlan =
-    swingStrategy === "Buy Shares + Calls"
+    swingStrategy === "Shares + Calls"
       ? "Calls: 30-45 DTE ATM / slight ITM"
       : "Calls: only if trend + vol align";
 
@@ -691,64 +699,6 @@ function computeConfidence(
   );
 }
 
-function diversifyBestStrategy(
-  horizons: Array<{ horizon: HorizonKey; strategy: Strategy; score: number }>,
-  riskLabel: RiskLabel,
-  profile: TickerProfile,
-  technicals: TechnicalFactors,
-  symbol: string
-): Strategy {
-  const sorted = [...horizons].sort((a, b) => b.score - a.score);
-  const leader = sorted[0];
-  const runnerUp = sorted[1];
-
-  if (!leader) return "Watch / Avoid";
-  if (leader.score < 6.85) return "Watch / Avoid";
-  if (leader.score < 8.25) return "Watch / Starter";
-
-  const topRanked = leader.score >= 8.25;
-  const strongTrend =
-    technicals.trendAligned &&
-    technicals.lr50Slope >= 0.2 &&
-    technicals.volatilityPercent <= 8.8 &&
-    technicals.atrPercent <= 7.4;
-  const mediumOrLowerRisk = riskLabel === "Low" || riskLabel === "Medium";
-
-  if (topRanked && STRONG_NAMES.has(symbol.toUpperCase())) {
-    return "Buy Shares";
-  }
-
-  if (riskLabel === "High") {
-    return leader.score >= 7.35 ? "Watch / Starter" : "Watch / Avoid";
-  }
-
-  if (riskLabel === "Extreme") {
-    if (leader.score <= 6.1) return "Watch / Avoid";
-    return leader.score >= 7.4 ? "Watch / Starter" : "Watch / Avoid";
-  }
-
-  if (strongTrend && mediumOrLowerRisk && leader.score >= 8.45) {
-    return "Buy Shares + Calls";
-  }
-
-  if (profile.speculative) {
-    if (leader.horizon === "swing" && leader.score >= 8.6) return "Buy Calls";
-    if (leader.score >= 8.2 && (runnerUp?.score ?? 0) >= 7.7) return "Buy Shares";
-    return leader.score >= 6.8 ? "Watch / Starter" : "Watch / Avoid";
-  }
-
-  if (leader.horizon === "oneYear" || leader.horizon === "sixMonth") {
-    if (leader.score >= 8.55 && (runnerUp?.score ?? 0) >= 7.9) return "Buy Shares + Calls";
-    return leader.score >= 8 ? "Buy Shares" : "Watch / Starter";
-  }
-
-  if (leader.horizon === "swing" && leader.score >= 8.5) {
-    return "Buy Shares + Calls";
-  }
-
-  return leader.strategy;
-}
-
 function expandScoreRange(score: number, riskScore: number, profile: TickerProfile): number {
   const centered = score - 6.6;
   const amplified = 6.8 + centered * 1.72 + Math.sign(centered) * Math.abs(centered) * 0.2;
@@ -781,20 +731,6 @@ export function computeMetrics(item: Item): RowMetrics {
   const sixMonthStrategy = getStrategy("sixMonth", sixMonthExpanded, riskLabel, technicals);
   const oneYearStrategy = getStrategy("oneYear", oneYearExpanded, riskLabel, technicals);
 
-  const horizonRanked = [
-    { horizon: "swing" as HorizonKey, strategy: swingStrategy, score: swingExpanded },
-    { horizon: "threeMonth" as HorizonKey, strategy: threeMonthStrategy, score: threeMonthExpanded },
-    { horizon: "sixMonth" as HorizonKey, strategy: sixMonthStrategy, score: sixMonthExpanded },
-    { horizon: "oneYear" as HorizonKey, strategy: oneYearStrategy, score: oneYearExpanded },
-  ];
-
-  const bestStrategy = diversifyBestStrategy(
-    horizonRanked,
-    riskLabel,
-    profile,
-    technicals,
-    item.symbol
-  );
   const confidence = computeConfidence(
     [swingExpanded, threeMonthExpanded, sixMonthExpanded, oneYearExpanded],
     item,
@@ -845,6 +781,8 @@ export function computeMetrics(item: Item): RowMetrics {
   if (hotSetup) notes.push("Multi-horizon alignment");
   if (riskLabel === "Extreme") notes.push("Extreme risk profile");
   if (num(item.price) <= 0) notes.push("Missing live quote, refresh all");
+  const confidenceLabel: "Low" | "Medium" | "High" =
+    confidence >= 7.4 ? "High" : confidence >= 5.8 ? "Medium" : "Low";
 
   return {
     whaleV2,
@@ -868,7 +806,7 @@ export function computeMetrics(item: Item): RowMetrics {
     threeMonthStrategy,
     sixMonthStrategy,
     oneYearStrategy,
-    bestStrategy,
+    confidenceLabel,
     marketRegime,
     opportunityScore,
     entryZone: tradePlan.entryZone,
