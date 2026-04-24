@@ -130,20 +130,32 @@ export default function DashboardClientShell() {
           return;
         }
 
-        const mapped: Item[] = data.map((row: Record<string, unknown>) => ({
-          symbol: row.symbol,
-          bias: row.bias ?? "Watch",
-          price: num(row.price),
-          support: num(row.support),
-          resistance: num(row.resistance),
-          rsi: num(row.rsi, 50),
-          volumeRatio: num(row.volumeRatio, 1),
-          technicalScore: num(row.technicalScore, 70),
-          whaleScore: num(row.whaleScore, 60),
-          macroScore: num(row.macroScore, 60),
-          politicalScore: num(row.politicalScore, 60),
-          notes: Array.isArray(row.notes) ? row.notes : [],
-        }));
+        const mapped: Item[] = data
+          .map((row: Record<string, unknown>) => {
+            const rawBias = row.bias;
+            const bias: Item["bias"] =
+              rawBias === "Bullish" || rawBias === "Bearish" || rawBias === "Watch"
+                ? rawBias
+                : "Watch";
+
+            return {
+              symbol: typeof row.symbol === "string" ? row.symbol : "",
+              bias,
+              price: num(row.price),
+              support: num(row.support),
+              resistance: num(row.resistance),
+              rsi: num(row.rsi, 50),
+              volumeRatio: num(row.volumeRatio, 1),
+              technicalScore: num(row.technicalScore, 70),
+              whaleScore: num(row.whaleScore, 60),
+              macroScore: num(row.macroScore, 60),
+              politicalScore: num(row.politicalScore, 60),
+              notes: Array.isArray(row.notes)
+                ? row.notes.filter((note): note is string => typeof note === "string")
+                : [],
+            };
+          })
+          .filter((item) => item.symbol);
 
         setItems(mapped);
         setSelectedSymbol(mapped[0]?.symbol ?? "");
