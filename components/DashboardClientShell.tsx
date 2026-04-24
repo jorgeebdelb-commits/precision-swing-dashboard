@@ -263,7 +263,6 @@ export default function DashboardClientShell() {
       if (sortKey === "oneYear") return row.metrics.oneYear;
       if (sortKey === "riskScore") return row.metrics.riskScore;
       if (sortKey === "confidence") return row.metrics.confidence;
-      if (sortKey === "bestStrategy") return row.metrics.bestStrategy;
       return row.metrics.swing;
     };
 
@@ -956,7 +955,7 @@ export default function DashboardClientShell() {
                 {metrics.swingSignal}
               </div>
               <div style={{ marginTop: 8, fontSize: 13, color: "#cbd5e1" }}>
-                {metrics.bestStrategy} • Entry {metrics.entryZone}
+                Swing {metrics.swingSignal} / {metrics.swingStrategy} • Entry {metrics.entryZone}
               </div>
             </div>
           )
@@ -1068,8 +1067,12 @@ export default function DashboardClientShell() {
               ["Risk", selectedMetrics.riskLabel, riskColor(selectedMetrics.riskLabel)],
               [
                 "Confidence",
-                selectedMetrics.confidence.toFixed(1),
-                glowColor(selectedMetrics.confidence * 10),
+                selectedMetrics.confidenceLabel,
+                selectedMetrics.confidenceLabel === "High"
+                  ? "#22c55e"
+                  : selectedMetrics.confidenceLabel === "Medium"
+                  ? "#f59e0b"
+                  : "#ef4444",
               ],
               ["Regime", selectedMetrics.marketRegime, "#f8fafc"],
               [
@@ -1077,7 +1080,7 @@ export default function DashboardClientShell() {
                 selectedMetrics.momentumToday,
                 glowColor(selectedMetrics.momentumToday),
               ],
-              ["Best", selectedMetrics.bestStrategy, "#38bdf8"],
+              ["Swing Plan", selectedMetrics.swingStrategy, "#38bdf8"],
             ].map((card) => (
               <div key={String(card[0])} style={statCardStyle()}>
                 <div style={{ fontSize: 12, color: "#94a3b8" }}>{card[0]}</div>
@@ -1252,7 +1255,7 @@ export default function DashboardClientShell() {
                   <div>
                     <div style={{ fontWeight: 800, color: "#f8fafc" }}>{item.symbol}</div>
                     <div style={{ fontSize: 12, color: "#94a3b8" }}>
-                      {metrics.swingSignal} • {metrics.bestStrategy} • Risk {metrics.riskLabel}
+                      Swing {metrics.swingSignal} / {metrics.swingStrategy}
                     </div>
                   </div>
                   <div style={{ fontWeight: 800, color: "#22c55e" }}>
@@ -1341,23 +1344,24 @@ export default function DashboardClientShell() {
               <th style={{ padding: 9, textAlign: "center" }}>
                 {renderSortButton("Swing", "swing")}
               </th>
+              <th style={{ padding: 9, textAlign: "center" }}>Swing Strategy</th>
               <th style={{ padding: 9, textAlign: "center" }}>
                 {renderSortButton("3M", "threeMonth")}
               </th>
+              <th style={{ padding: 9, textAlign: "center" }}>3M Strategy</th>
               <th style={{ padding: 9, textAlign: "center" }}>
                 {renderSortButton("6M", "sixMonth")}
               </th>
+              <th style={{ padding: 9, textAlign: "center" }}>6M Strategy</th>
               <th style={{ padding: 9, textAlign: "center" }}>
                 {renderSortButton("1Y", "oneYear")}
               </th>
+              <th style={{ padding: 9, textAlign: "center" }}>1Y Strategy</th>
               <th style={{ padding: 9, textAlign: "center" }}>
                 {renderSortButton("Risk", "riskScore")}
               </th>
               <th style={{ padding: 9, textAlign: "center" }}>
                 {renderSortButton("Confidence", "confidence")}
-              </th>
-              <th style={{ padding: 9, textAlign: "center" }}>
-                {renderSortButton("Best", "bestStrategy")}
               </th>
               <th style={{ padding: 9, textAlign: "center" }}>Why</th>
               <th style={{ padding: 9, textAlign: "center" }}>Action</th>
@@ -1447,6 +1451,9 @@ export default function DashboardClientShell() {
                 >
                   {metrics.swing.toFixed(1)}
                 </td>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 800 }}>
+                  {metrics.swingSignal} / {metrics.swingStrategy}
+                </td>
 
                 <td
                   style={{
@@ -1458,13 +1465,22 @@ export default function DashboardClientShell() {
                 >
                   {metrics.threeMonth.toFixed(1)}
                 </td>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 800 }}>
+                  {metrics.threeMonthSignal} / {metrics.threeMonthStrategy}
+                </td>
 
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 900 }}>
                   {metrics.sixMonth.toFixed(1)}
                 </td>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 800 }}>
+                  {metrics.sixMonthSignal} / {metrics.sixMonthStrategy}
+                </td>
 
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 900 }}>
                   {metrics.oneYear.toFixed(1)}
+                </td>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 800 }}>
+                  {metrics.oneYearSignal} / {metrics.oneYearStrategy}
                 </td>
 
                 <td
@@ -1486,11 +1502,7 @@ export default function DashboardClientShell() {
                     color: glowColor(metrics.confidence * 10),
                   }}
                 >
-                  {metrics.confidence.toFixed(1)}
-                </td>
-
-                <td style={{ padding: 9, textAlign: "center", fontWeight: 800 }}>
-                  {metrics.bestStrategy}
+                  {metrics.confidenceLabel}
                 </td>
 
                 <td style={{ padding: 9, textAlign: "left", maxWidth: 260 }}>
