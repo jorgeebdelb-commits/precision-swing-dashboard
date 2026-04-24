@@ -31,10 +31,11 @@ function signalColor(signal: string) {
   return "#ef4444";
 }
 
-function riskColor(risk: "Low" | "Medium" | "High") {
+function riskColor(risk: "Low" | "Medium" | "High" | "Extreme") {
   if (risk === "Low") return "#22c55e";
   if (risk === "Medium") return "#f59e0b";
-  return "#ef4444";
+  if (risk === "High") return "#ef4444";
+  return "#b91c1c";
 }
 
 function softCard(signal?: string) {
@@ -104,7 +105,7 @@ export default function DashboardClientShell() {
     useState<SentimentResponse | null>(null);
 
   const [history, setHistory] = useState<{ time: string; price: number }[]>([]);
-  const [sortKey, setSortKey] = useState<SortKey>("opportunityScore");
+  const [sortKey, setSortKey] = useState<SortKey>("swing");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
 
   const chartRef = useRef<HTMLCanvasElement | null>(null);
@@ -150,6 +151,17 @@ export default function DashboardClientShell() {
               whaleScore: num(row.whaleScore, 60),
               macroScore: num(row.macroScore, 60),
               politicalScore: num(row.politicalScore, 60),
+              lr50: num(row.lr50),
+              lr50Slope: num(row.lr50Slope),
+              lr100: num(row.lr100),
+              lr100Slope: num(row.lr100Slope),
+              fibSupport: num(row.fibSupport),
+              fibResistance: num(row.fibResistance),
+              atrPercent: num(row.atrPercent),
+              betaProxy: num(row.betaProxy),
+              priceVolatility: num(row.priceVolatility),
+              ivPercentile: num(row.ivPercentile),
+              earningsDays: num(row.earningsDays),
               notes: Array.isArray(row.notes)
                 ? row.notes.filter((note): note is string => typeof note === "string")
                 : [],
@@ -217,13 +229,18 @@ export default function DashboardClientShell() {
     const getValue = (row: RowData) => {
       if (sortKey === "symbol") return row.item.symbol;
       if (sortKey === "price") return row.item.price;
-      if (sortKey === "whaleV2") return row.metrics.whaleV2;
+      if (sortKey === "technical") return row.metrics.technical;
+      if (sortKey === "fundamental") return row.metrics.fundamental;
+      if (sortKey === "intelligence") return row.metrics.intelligence;
+      if (sortKey === "environment") return row.metrics.environment;
       if (sortKey === "swing") return row.metrics.swing;
       if (sortKey === "threeMonth") return row.metrics.threeMonth;
       if (sortKey === "sixMonth") return row.metrics.sixMonth;
       if (sortKey === "oneYear") return row.metrics.oneYear;
       if (sortKey === "riskScore") return row.metrics.riskScore;
-      return row.metrics.opportunityScore;
+      if (sortKey === "confidence") return row.metrics.confidence;
+      if (sortKey === "bestStrategy") return row.metrics.bestStrategy;
+      return row.metrics.swing;
     };
 
     copy.sort((a, b) => {
@@ -820,7 +837,7 @@ export default function DashboardClientShell() {
         </button>
 
         <span style={{ color: "#94a3b8", fontSize: 13 }}>
-          {quoteMessage || sentimentMessage || "Opportunity score is the default ranking."}
+          {quoteMessage || sentimentMessage || "Swing score is the default ranking."}
         </span>
       </div>
 
@@ -1269,7 +1286,7 @@ export default function DashboardClientShell() {
             width: "100%",
             borderCollapse: "collapse",
             fontSize: 13,
-            minWidth: 1750,
+            minWidth: 1680,
             color: "#e2e8f0",
           }}
         >
@@ -1282,35 +1299,39 @@ export default function DashboardClientShell() {
                 {renderSortButton("Price", "price")}
               </th>
               <th style={{ padding: 9, textAlign: "center" }}>
-                {renderSortButton("Opp Score", "opportunityScore")}
+                {renderSortButton("Tech", "technical")}
               </th>
               <th style={{ padding: 9, textAlign: "center" }}>
-                {renderSortButton("Whale V2", "whaleV2")}
+                {renderSortButton("Fund", "fundamental")}
+              </th>
+              <th style={{ padding: 9, textAlign: "center" }}>
+                {renderSortButton("Intel", "intelligence")}
+              </th>
+              <th style={{ padding: 9, textAlign: "center" }}>
+                {renderSortButton("Env", "environment")}
               </th>
               <th style={{ padding: 9, textAlign: "center" }}>
                 {renderSortButton("Swing", "swing")}
               </th>
-              <th style={{ padding: 9, textAlign: "center" }}>Swing Strategy</th>
               <th style={{ padding: 9, textAlign: "center" }}>
                 {renderSortButton("3M", "threeMonth")}
               </th>
-              <th style={{ padding: 9, textAlign: "center" }}>3M Strategy</th>
               <th style={{ padding: 9, textAlign: "center" }}>
                 {renderSortButton("6M", "sixMonth")}
               </th>
-              <th style={{ padding: 9, textAlign: "center" }}>6M Strategy</th>
               <th style={{ padding: 9, textAlign: "center" }}>
                 {renderSortButton("1Y", "oneYear")}
               </th>
-              <th style={{ padding: 9, textAlign: "center" }}>1Y Strategy</th>
-              <th style={{ padding: 9, textAlign: "center" }}>Entry</th>
-              <th style={{ padding: 9, textAlign: "center" }}>Stop</th>
-              <th style={{ padding: 9, textAlign: "center" }}>T1</th>
               <th style={{ padding: 9, textAlign: "center" }}>
                 {renderSortButton("Risk", "riskScore")}
               </th>
-              <th style={{ padding: 9, textAlign: "center" }}>Hot</th>
-              <th style={{ padding: 9, textAlign: "center" }}>Best</th>
+              <th style={{ padding: 9, textAlign: "center" }}>
+                {renderSortButton("Confidence", "confidence")}
+              </th>
+              <th style={{ padding: 9, textAlign: "center" }}>
+                {renderSortButton("Best", "bestStrategy")}
+              </th>
+              <th style={{ padding: 9, textAlign: "center" }}>Why</th>
               <th style={{ padding: 9, textAlign: "center" }}>Action</th>
             </tr>
           </thead>
@@ -1349,10 +1370,10 @@ export default function DashboardClientShell() {
                     padding: 9,
                     textAlign: "center",
                     fontWeight: 900,
-                    color: glowColor(metrics.opportunityScore),
+                    color: glowColor(metrics.technical * 10),
                   }}
                 >
-                  {metrics.opportunityScore}
+                  {metrics.technical.toFixed(1)}
                 </td>
 
                 <td
@@ -1360,10 +1381,32 @@ export default function DashboardClientShell() {
                     padding: 9,
                     textAlign: "center",
                     fontWeight: 900,
-                    color: glowColor(metrics.whaleV2),
+                    color: glowColor(metrics.fundamental * 10),
                   }}
                 >
-                  {metrics.whaleV2}
+                  {metrics.fundamental.toFixed(1)}
+                </td>
+
+                <td
+                  style={{
+                    padding: 9,
+                    textAlign: "center",
+                    fontWeight: 900,
+                    color: glowColor(metrics.intelligence * 10),
+                  }}
+                >
+                  {metrics.intelligence.toFixed(1)}
+                </td>
+
+                <td
+                  style={{
+                    padding: 9,
+                    textAlign: "center",
+                    fontWeight: 900,
+                    color: glowColor(metrics.environment * 10),
+                  }}
+                >
+                  {metrics.environment.toFixed(1)}
                 </td>
 
                 <td
@@ -1374,11 +1417,7 @@ export default function DashboardClientShell() {
                     color: signalColor(metrics.swingSignal),
                   }}
                 >
-                  {metrics.swingSignal} ({metrics.swing})
-                </td>
-
-                <td style={{ padding: 9, textAlign: "center" }}>
-                  {metrics.swingStrategy}
+                  {metrics.swing.toFixed(1)}
                 </td>
 
                 <td
@@ -1389,53 +1428,15 @@ export default function DashboardClientShell() {
                     color: signalColor(metrics.threeMonthSignal),
                   }}
                 >
-                  {metrics.threeMonthSignal} ({metrics.threeMonth})
+                  {metrics.threeMonth.toFixed(1)}
                 </td>
 
-                <td style={{ padding: 9, textAlign: "center" }}>
-                  {metrics.threeMonthStrategy}
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 900 }}>
+                  {metrics.sixMonth.toFixed(1)}
                 </td>
 
-                <td
-                  style={{
-                    padding: 9,
-                    textAlign: "center",
-                    fontWeight: 900,
-                    color: signalColor(metrics.sixMonthSignal),
-                  }}
-                >
-                  {metrics.sixMonthSignal} ({metrics.sixMonth})
-                </td>
-
-                <td style={{ padding: 9, textAlign: "center" }}>
-                  {metrics.sixMonthStrategy}
-                </td>
-
-                <td
-                  style={{
-                    padding: 9,
-                    textAlign: "center",
-                    fontWeight: 900,
-                    color: signalColor(metrics.oneYearSignal),
-                  }}
-                >
-                  {metrics.oneYearSignal} ({metrics.oneYear})
-                </td>
-
-                <td style={{ padding: 9, textAlign: "center" }}>
-                  {metrics.oneYearStrategy}
-                </td>
-
-                <td style={{ padding: 9, textAlign: "center" }}>
-                  {metrics.entryZone}
-                </td>
-
-                <td style={{ padding: 9, textAlign: "center" }}>
-                  {metrics.stopLoss}
-                </td>
-
-                <td style={{ padding: 9, textAlign: "center" }}>
-                  {metrics.target1}
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 900 }}>
+                  {metrics.oneYear.toFixed(1)}
                 </td>
 
                 <td
@@ -1454,14 +1455,18 @@ export default function DashboardClientShell() {
                     padding: 9,
                     textAlign: "center",
                     fontWeight: 900,
-                    color: metrics.hotSetup ? "#22c55e" : "#64748b",
+                    color: glowColor(metrics.confidence * 10),
                   }}
                 >
-                  {metrics.hotSetup ? "Yes" : "No"}
+                  {metrics.confidence.toFixed(1)}
                 </td>
 
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 800 }}>
                   {metrics.bestStrategy}
+                </td>
+
+                <td style={{ padding: 9, textAlign: "left", maxWidth: 260 }}>
+                  {metrics.why.join(" • ")}
                 </td>
 
                 <td style={{ padding: 9, textAlign: "center" }}>
