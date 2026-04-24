@@ -7,7 +7,7 @@ import type {
 
 import { clamp, formatPrice, num } from "../app/lib/helpers";
 
-export type RiskLabel = "Unknown" | "Low" | "Medium" | "High" | "Extreme";
+export type RiskLabel = "Low" | "Medium" | "High" | "Extreme";
 
 type PillarScores = {
   technical: number;
@@ -95,6 +95,7 @@ export type RowMetrics = {
 };
 
 const HIGH_BETA_SYMBOLS = new Set(["TSLA", "MARA", "RIVN", "IREN", "RGTI", "COIN"]);
+const STRONG_NAMES = new Set(["AMD", "NVDA", "AMZN"]);
 
 const SYMBOL_PROFILES: Record<string, TickerProfile> = {
   NVDA: { sector: "Semiconductors", speculative: false, qualityTilt: 0.9, momentumTilt: 0.8 },
@@ -228,7 +229,7 @@ function computePillars(item: Item): { pillars: PillarScores; technicals: Techni
   const volumeScore = clamp10(4.5 + num(item.volumeRatio, 1) * 2.3);
   const atrScore = clamp10(10 - t.atrPercent / 1.7);
 
-  const technical = clamp10(
+  const technicalRaw = clamp10(
     lr50ValueScore * 0.13 +
       lr100ValueScore * 0.12 +
       slopeScore * 0.16 +
@@ -241,6 +242,35 @@ function computePillars(item: Item): { pillars: PillarScores; technicals: Techni
       sectorAdj.technical +
       profile.momentumTilt * 0.12
   );
+
+  const momentumEdge =
+    (t.trendAligned ? 0.42 : -0.24) +
+    (slopeScore - 6.4) * 0.24 +
+    (volumeScore - 5.8) * 0.1 +
+    (rsiScore - 6.1) * 0.08;
+
+  let technical = clamp10(
+    6.8 +
+      (technicalRaw - 6.8) * 1.62 +
+      momentumEdge +
+      (profile.momentumTilt - 0.5) * 0.28
+  );
+
+  const weakTechnicalSetup =
+    !t.trendAligned || slopeScore < 5.8 || num(item.rsi, 50) < 46 || item.bias === "Bearish";
+  if (weakTechnicalSetup) {
+    technical = Math.max(5.5, Math.min(6.2, technical));
+  }
+
+  const eliteMomentumSetup =
+    t.trendAligned &&
+    slopeScore >= 7.1 &&
+    num(item.rsi, 50) >= 57 &&
+    num(item.volumeRatio, 1) >= 1.15 &&
+    item.bias !== "Bearish";
+  if (eliteMomentumSetup) {
+    technical = Math.max(8.5, technical);
+  }
 
   const qualityCore =
     scaleTo10(num(item.macroScore, 56 + symbolJitter(item.symbol, 3))) * 0.42 +
@@ -297,7 +327,6 @@ export function computeRisk(
   item: Item,
   technicals: TechnicalFactors
 ): { riskScore: number; riskLabel: RiskLabel } {
-  const price = Math.max(num(item.price), 0.01);
   const profile = getTickerProfile(item.symbol);
   const baseBeta = HIGH_BETA_SYMBOLS.has(item.symbol.toUpperCase()) ? 2.1 : 1.1;
 
@@ -308,33 +337,19 @@ export function computeRisk(
 
   const volatilityPercent = Math.max(technicals.volatilityPercent, 0);
   const atrPercent = Math.max(technicals.atrPercent, 0);
-
-  const seed = symbolSeed(item.symbol);
-  const earningsDays = num(item.earningsDays, (seed % 36) + 5);
-  const earningsRisk = earningsDays <= 5 ? 9.5 : earningsDays <= 10 ? 7.3 : 4.1;
-
-  const ivPercentile = num(
-    item.ivPercentile,
-    Math.min(100, 35 + volatilityPercent * 6 + Math.max(0, betaProxy - 1) * 12)
-  );
-
-  const rangeMid = (num(item.support, price * 0.96) + num(item.resistance, price * 1.05)) / 2;
-  const gapProxyPct = Math.abs(price - rangeMid) / Math.max(price, 0.01);
-  const gapRisk = clamp10(
-    gapProxyPct * 60 +
-      Math.max(0, num(item.volumeRatio, 1) - 1.15) * 2.4 +
-      (item.bias === "Bearish" ? 0.8 : 0)
+  const gapFrequency = clamp10(
+    volatilityPercent * 0.18 +
+      Math.max(0, num(item.volumeRatio, 1) - 1) * 2.2 +
+      (item.bias === "Bearish" ? 0.85 : 0.22) +
+      (profile.speculative ? 0.45 : 0)
   );
 
   const risk10 = clamp10(
-    atrPercent * 0.15 +
-      volatilityPercent * 0.25 +
-      betaProxy * 1.5 +
-      gapRisk * 0.95 +
-      earningsRisk * 0.9 +
-      ivPercentile * 0.027 +
-      (price < 5 ? 0.7 : 0) +
-      (profile.speculative ? 0.55 : 0)
+    atrPercent * 0.26 +
+      volatilityPercent * 0.24 +
+      gapFrequency * 1.95 +
+      betaProxy * 1.7 +
+      (profile.speculative ? 0.5 : 0)
   );
 
   const riskScore = Math.round(risk10 * 10);
@@ -556,10 +571,20 @@ function computeConfidence(
     item.priceVolatility !== undefined,
     item.ivPercentile !== undefined,
   ];
+  const criticalSignals = [
+    item.support !== undefined,
+    item.resistance !== undefined,
+    item.atrPercent !== undefined,
+    item.priceVolatility !== undefined,
+    item.betaProxy !== undefined,
+  ];
 
   const completeness = qualitySignals.filter(Boolean).length / qualitySignals.length;
+  const missingPenalty = (1 - completeness) * 2.25;
+  const criticalMissingPenalty =
+    ((criticalSignals.length - criticalSignals.filter(Boolean).length) / criticalSignals.length) * 1.4;
   const volatilityPenalty = clamp10((technicals.atrPercent * 0.42 + technicals.volatilityPercent * 0.33) / 2.6);
-  const unknownPenalty = riskLabel === "Unknown" ? 0.45 : 0;
+  const riskPenalty = riskLabel === "Extreme" ? 0.6 : riskLabel === "High" ? 0.32 : 0;
   const avgScore = mean;
 
   return clamp10(
@@ -568,20 +593,39 @@ function computeConfidence(
       Math.max(0, avgScore - 6.5) * 0.55 -
       spreadPenalty -
       volatilityPenalty * 0.42 -
-      unknownPenalty
+      riskPenalty -
+      missingPenalty -
+      criticalMissingPenalty
   );
 }
 
 function diversifyBestStrategy(
   horizons: Array<{ horizon: HorizonKey; strategy: Strategy; score: number }>,
   riskLabel: RiskLabel,
-  profile: TickerProfile
+  profile: TickerProfile,
+  technicals: TechnicalFactors,
+  symbol: string
 ): Strategy {
   const sorted = [...horizons].sort((a, b) => b.score - a.score);
   const leader = sorted[0];
   const runnerUp = sorted[1];
 
   if (!leader) return "Watch / Avoid";
+  if (leader.score < 6.85) return "Watch / Avoid";
+  if (leader.score < 8.25) return "Watch / Starter";
+
+  const topRanked = leader.score >= 8.25;
+  const strongTrend =
+    technicals.trendAligned &&
+    technicals.lr50Slope >= 0.2 &&
+    technicals.volatilityPercent <= 8.8 &&
+    technicals.atrPercent <= 7.4;
+  const mediumOrLowerRisk = riskLabel === "Low" || riskLabel === "Medium";
+
+  if (topRanked && STRONG_NAMES.has(symbol.toUpperCase())) {
+    if (strongTrend && mediumOrLowerRisk) return "Buy Shares + Calls";
+    return "Buy Shares";
+  }
 
   if (riskLabel === "High" || riskLabel === "Extreme") {
     return leader.score >= 7.4 ? "Watch / Starter" : "Watch / Avoid";
@@ -607,9 +651,9 @@ function diversifyBestStrategy(
 
 function expandScoreRange(score: number, riskScore: number, profile: TickerProfile): number {
   const centered = score - 6.6;
-  const amplified = 6.7 + centered * 1.45;
-  const riskDrag = (riskScore - 55) * 0.012;
-  const qualityBoost = profile.speculative ? -0.16 : 0.18;
+  const amplified = 6.8 + centered * 1.72 + Math.sign(centered) * Math.abs(centered) * 0.2;
+  const riskDrag = (riskScore - 55) * 0.016;
+  const qualityBoost = profile.speculative ? -0.2 : 0.24;
   return clamp10(amplified - riskDrag + qualityBoost);
 }
 
@@ -644,7 +688,13 @@ export function computeMetrics(item: Item): RowMetrics {
     { horizon: "oneYear" as HorizonKey, strategy: oneYearStrategy, score: oneYearExpanded },
   ];
 
-  const bestStrategy = diversifyBestStrategy(horizonRanked, riskLabel, profile);
+  const bestStrategy = diversifyBestStrategy(
+    horizonRanked,
+    riskLabel,
+    profile,
+    technicals,
+    item.symbol
+  );
   const confidence = computeConfidence(
     [swingExpanded, threeMonthExpanded, sixMonthExpanded, oneYearExpanded],
     item,
