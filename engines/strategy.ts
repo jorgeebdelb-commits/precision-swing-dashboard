@@ -16,6 +16,25 @@ type PillarScores = {
   environment: number;
 };
 
+type Sector =
+  | "Semiconductors"
+  | "Megacap Tech"
+  | "EV"
+  | "Crypto Mining"
+  | "Energy"
+  | "Healthcare"
+  | "Financials"
+  | "Industrials"
+  | "Consumer"
+  | "Unknown";
+
+type TickerProfile = {
+  sector: Sector;
+  speculative: boolean;
+  qualityTilt: number;
+  momentumTilt: number;
+};
+
 type TechnicalFactors = {
   lr50: number;
   lr100: number;
@@ -75,7 +94,30 @@ export type RowMetrics = {
   hotSetup: boolean;
 };
 
-const HIGH_BETA_SYMBOLS = new Set(["TSLA", "MARA", "IREN", "RGTI"]);
+const HIGH_BETA_SYMBOLS = new Set(["TSLA", "MARA", "RIVN", "IREN", "RGTI", "COIN"]);
+
+const SYMBOL_PROFILES: Record<string, TickerProfile> = {
+  NVDA: { sector: "Semiconductors", speculative: false, qualityTilt: 0.9, momentumTilt: 0.8 },
+  AMD: { sector: "Semiconductors", speculative: false, qualityTilt: 0.75, momentumTilt: 0.7 },
+  MRVL: { sector: "Semiconductors", speculative: false, qualityTilt: 0.5, momentumTilt: 0.55 },
+  AMZN: { sector: "Megacap Tech", speculative: false, qualityTilt: 0.8, momentumTilt: 0.45 },
+  TSLA: { sector: "EV", speculative: true, qualityTilt: 0.35, momentumTilt: 0.95 },
+  RIVN: { sector: "EV", speculative: true, qualityTilt: 0.2, momentumTilt: 0.9 },
+  MARA: { sector: "Crypto Mining", speculative: true, qualityTilt: 0.1, momentumTilt: 1 },
+};
+
+const SECTOR_ADJUSTMENTS: Record<Sector, { fundamental: number; technical: number; environment: number }> = {
+  Semiconductors: { fundamental: 0.35, technical: 0.2, environment: -0.1 },
+  "Megacap Tech": { fundamental: 0.45, technical: 0.1, environment: 0.1 },
+  EV: { fundamental: -0.3, technical: 0.35, environment: -0.15 },
+  "Crypto Mining": { fundamental: -0.7, technical: 0.45, environment: -0.4 },
+  Energy: { fundamental: 0.1, technical: 0.15, environment: 0.25 },
+  Healthcare: { fundamental: 0.2, technical: -0.05, environment: 0.15 },
+  Financials: { fundamental: 0.25, technical: -0.05, environment: 0.25 },
+  Industrials: { fundamental: 0.15, technical: 0.05, environment: 0.2 },
+  Consumer: { fundamental: 0.05, technical: 0, environment: 0.1 },
+  Unknown: { fundamental: 0, technical: 0, environment: 0 },
+};
 
 const clamp10 = (value: number): number =>
   Math.max(1, Math.min(10, Math.round(value * 10) / 10));
@@ -83,9 +125,9 @@ const clamp10 = (value: number): number =>
 const scaleTo10 = (value: number): number => clamp10(clamp(value) / 10);
 
 const scoreLabel = (score: number): string => {
-  if (score >= 8.5) return "Strong Buy";
-  if (score >= 7) return "Buy";
-  if (score >= 6) return "Watch";
+  if (score >= 8.8) return "Strong Buy";
+  if (score >= 7.1) return "Buy";
+  if (score >= 5.5) return "Watch";
   return "Avoid";
 };
 
@@ -94,6 +136,32 @@ const symbolSeed = (symbol: string): number => {
     .split("")
     .reduce((sum, char, idx) => sum + char.charCodeAt(0) * (idx + 1), 0);
 };
+
+function symbolJitter(symbol: string, scale = 0.22): number {
+  const seed = symbolSeed(symbol) % 97;
+  return ((seed / 96) * 2 - 1) * scale;
+}
+
+function inferSector(symbol: string): Sector {
+  if (["XOM", "CVX", "SLB"].includes(symbol)) return "Energy";
+  if (["JPM", "MS", "GS"].includes(symbol)) return "Financials";
+  if (["PFE", "LLY", "JNJ"].includes(symbol)) return "Healthcare";
+  if (["CAT", "GE", "DE"].includes(symbol)) return "Industrials";
+  if (["WMT", "COST", "HD"].includes(symbol)) return "Consumer";
+  return "Unknown";
+}
+
+function getTickerProfile(symbol: string): TickerProfile {
+  const upper = symbol.toUpperCase();
+  return (
+    SYMBOL_PROFILES[upper] ?? {
+      sector: inferSector(upper),
+      speculative: HIGH_BETA_SYMBOLS.has(upper),
+      qualityTilt: 0.55 + symbolJitter(upper, 0.12),
+      momentumTilt: 0.5 + symbolJitter(upper.split("").reverse().join(""), 0.15),
+    }
+  );
+}
 
 function buildTechnicalFactors(item: Item): TechnicalFactors {
   const price = num(item.price);
@@ -139,55 +207,70 @@ function buildTechnicalFactors(item: Item): TechnicalFactors {
   };
 }
 
-function computePillars(item: Item): { pillars: PillarScores; technicals: TechnicalFactors } {
+function computePillars(item: Item): { pillars: PillarScores; technicals: TechnicalFactors; profile: TickerProfile } {
   const t = buildTechnicalFactors(item);
   const price = num(item.price);
+  const profile = getTickerProfile(item.symbol);
+  const sectorAdj = SECTOR_ADJUSTMENTS[profile.sector];
 
   const lr50Distance = (price - t.lr50) / Math.max(price, 0.01);
   const lr100Distance = (price - t.lr100) / Math.max(price, 0.01);
   const fibDistance = Math.abs(price - t.fibLevel) / Math.max(price, 0.01);
 
-  const lr50ValueScore = clamp10(6 + lr50Distance * 55);
-  const lr100ValueScore = clamp10(6 + lr100Distance * 55);
+  const lr50ValueScore = clamp10(5.8 + lr50Distance * 58);
+  const lr100ValueScore = clamp10(5.8 + lr100Distance * 58);
   const slopeScore = clamp10(5 + t.lr50Slope * 0.65 + t.lr100Slope * 0.45);
   const priceVsLrScore = clamp10(5 + (lr50Distance + lr100Distance) * 35);
-  const alignmentScore = t.trendAligned ? 8.4 : 4.9;
-  const fibScore = clamp10(8.4 - fibDistance * 120);
+  const alignmentScore = t.trendAligned ? 8.6 : 4.6;
+  const fibScore = clamp10(8.3 - fibDistance * 124);
   const rsiScore = clamp10(10 - Math.abs(num(item.rsi, 50) - 58) / 6.5);
-  const volumeScore = clamp10(4.6 + num(item.volumeRatio, 1) * 2.25);
-  const atrScore = clamp10(10 - t.atrPercent / 1.8);
+  const volumeScore = clamp10(4.5 + num(item.volumeRatio, 1) * 2.3);
+  const atrScore = clamp10(10 - t.atrPercent / 1.7);
 
   const technical = clamp10(
     lr50ValueScore * 0.13 +
       lr100ValueScore * 0.12 +
-      slopeScore * 0.15 +
+      slopeScore * 0.16 +
       priceVsLrScore * 0.15 +
       alignmentScore * 0.14 +
-      fibScore * 0.12 +
+      fibScore * 0.11 +
       rsiScore * 0.08 +
       volumeScore * 0.06 +
-      atrScore * 0.05
+      atrScore * 0.05 +
+      sectorAdj.technical +
+      profile.momentumTilt * 0.12
   );
 
+  const qualityCore =
+    scaleTo10(num(item.macroScore, 56 + symbolJitter(item.symbol, 3))) * 0.42 +
+    scaleTo10(num(item.politicalScore, 55 + symbolJitter(item.symbol, 2.7))) * 0.24 +
+    scaleTo10(num(item.technicalScore, 58 + symbolJitter(item.symbol, 3.2))) * 0.16;
+
+  const stabilityPenalty = clamp10(t.volatilityPercent / 2.25) * 0.22;
+
   const fundamental = clamp10(
-    scaleTo10(num(item.macroScore, 58)) * 0.45 +
-      scaleTo10(num(item.politicalScore, 55)) * 0.25 +
-      scaleTo10(num(item.technicalScore, 60)) * 0.2 +
-      clamp10(10 - t.volatilityPercent / 2.7) * 0.1
+    qualityCore +
+      profile.qualityTilt * 1.2 -
+      stabilityPenalty -
+      (profile.speculative ? 0.55 : 0) +
+      sectorAdj.fundamental
   );
 
   const intelligence = clamp10(
-    scaleTo10(num(item.whaleScore, 60)) * 0.5 +
+    scaleTo10(num(item.whaleScore, 60 + symbolJitter(item.symbol, 4))) * 0.48 +
       volumeScore * 0.2 +
-      rsiScore * 0.1 +
-      (item.bias === "Bullish" ? 8.2 : item.bias === "Bearish" ? 3.9 : 5.9) * 0.2
+      rsiScore * 0.11 +
+      (item.bias === "Bullish" ? 8.3 : item.bias === "Bearish" ? 3.8 : 5.8) * 0.15 +
+      profile.momentumTilt * 0.35
   );
 
   const environment = clamp10(
-    scaleTo10(num(item.politicalScore, 55)) * 0.35 +
-      scaleTo10(num(item.macroScore, 58)) * 0.35 +
-      clamp10(10 - t.atrPercent / 2.2) * 0.2 +
-      (item.bias === "Bearish" ? 4.4 : 6.6) * 0.1
+    scaleTo10(num(item.politicalScore, 55 + symbolJitter(item.symbol, 2.5))) * 0.31 +
+      scaleTo10(num(item.macroScore, 57 + symbolJitter(item.symbol, 2.9))) * 0.34 +
+      clamp10(10 - t.atrPercent / 2.1) * 0.22 +
+      (item.bias === "Bearish" ? 4.2 : 6.7) * 0.08 +
+      sectorAdj.environment -
+      (profile.speculative ? 0.35 : 0)
   );
 
   return {
@@ -198,6 +281,7 @@ function computePillars(item: Item): { pillars: PillarScores; technicals: Techni
       environment,
     },
     technicals: t,
+    profile,
   };
 }
 
@@ -206,6 +290,7 @@ export function computeRisk(
   technicals: TechnicalFactors
 ): { riskScore: number; riskLabel: RiskLabel } {
   const price = Math.max(num(item.price), 0.01);
+  const profile = getTickerProfile(item.symbol);
   const baseBeta = HIGH_BETA_SYMBOLS.has(item.symbol.toUpperCase()) ? 2.1 : 1.1;
 
   const hasRiskInputs =
@@ -217,7 +302,7 @@ export function computeRisk(
 
   if (!hasRiskInputs) {
     return {
-      riskScore: 50,
+      riskScore: profile.speculative ? 66 : 48,
       riskLabel: "Unknown",
     };
   }
@@ -240,12 +325,13 @@ export function computeRisk(
   );
 
   const risk10 = clamp10(
-    atrPercent * 0.16 +
-      volatilityPercent * 0.24 +
-      betaProxy * 1.45 +
+    atrPercent * 0.15 +
+      volatilityPercent * 0.25 +
+      betaProxy * 1.5 +
       earningsRisk * 0.9 +
-      ivPercentile * 0.028 +
-      (price < 5 ? 0.8 : 0)
+      ivPercentile * 0.027 +
+      (price < 5 ? 0.7 : 0) +
+      (profile.speculative ? 0.55 : 0)
   );
 
   const riskScore = Math.round(risk10 * 10);
@@ -261,39 +347,42 @@ export function computeRisk(
   return { riskScore, riskLabel };
 }
 
-function weightedHorizonScore(horizon: HorizonKey, pillars: PillarScores): number {
+function weightedHorizonScore(horizon: HorizonKey, pillars: PillarScores, profile: TickerProfile): number {
   if (horizon === "swing") {
     return clamp10(
       pillars.technical * 0.5 +
-        pillars.intelligence * 0.25 +
-        pillars.environment * 0.15 +
-        pillars.fundamental * 0.1
+        pillars.intelligence * 0.26 +
+        pillars.environment * 0.14 +
+        pillars.fundamental * 0.1 +
+        profile.momentumTilt * 0.18
     );
   }
 
   if (horizon === "threeMonth") {
     return clamp10(
       pillars.technical * 0.3 +
-        pillars.fundamental * 0.3 +
-        pillars.intelligence * 0.25 +
+        pillars.fundamental * 0.31 +
+        pillars.intelligence * 0.24 +
         pillars.environment * 0.15
     );
   }
 
   if (horizon === "sixMonth") {
     return clamp10(
-      pillars.fundamental * 0.4 +
-        pillars.technical * 0.25 +
-        pillars.environment * 0.2 +
-        pillars.intelligence * 0.15
+      pillars.fundamental * 0.42 +
+        pillars.technical * 0.23 +
+        pillars.environment * 0.22 +
+        pillars.intelligence * 0.13 +
+        profile.qualityTilt * 0.12
     );
   }
 
   return clamp10(
-    pillars.fundamental * 0.45 +
-      pillars.environment * 0.25 +
-      pillars.technical * 0.2 +
-      pillars.intelligence * 0.1
+    pillars.fundamental * 0.47 +
+      pillars.environment * 0.26 +
+      pillars.technical * 0.18 +
+      pillars.intelligence * 0.09 +
+      profile.qualityTilt * 0.16
   );
 }
 
@@ -313,27 +402,27 @@ function callsAllowed(
 }
 
 export function getStrategy(
-  _horizon: HorizonKey,
+  horizon: HorizonKey,
   score: number,
   riskLabel: RiskLabel,
   technicals: TechnicalFactors
 ): Strategy {
   if (riskLabel === "Unknown") {
-    return score >= 7.8 ? "Watch / Starter" : "Watch / Avoid";
+    return score >= 7.9 ? "Watch / Starter" : "Watch / Avoid";
   }
 
   const allowCalls = callsAllowed(score, riskLabel, technicals);
 
-  if (score >= 8.8 && riskLabel === "Low" && technicals.lr50Slope > 0.35) {
+  if (horizon === "swing" && score >= 8.8 && riskLabel === "Low" && technicals.lr50Slope > 0.35) {
     return "Buy Calls";
   }
 
-  if (score >= 8 && riskLabel !== "High" && riskLabel !== "Extreme") {
+  if (score >= 8.1 && riskLabel !== "High" && riskLabel !== "Extreme") {
     return allowCalls ? "Buy Shares + Calls" : "Buy Shares";
   }
 
   if (score >= 7) return "Buy Shares";
-  if (score >= 6) return "Watch / Starter";
+  if (score >= 5.7) return "Watch / Starter";
   return "Watch / Avoid";
 }
 
@@ -412,60 +501,102 @@ function buildWhy(
   item: Item,
   pillars: PillarScores,
   technicals: TechnicalFactors,
-  riskLabel: RiskLabel
+  riskLabel: RiskLabel,
+  profile: TickerProfile
 ): string[] {
   const price = num(item.price);
   const reasons: string[] = [];
 
-  if (price >= technicals.lr50 && price >= technicals.lr100) reasons.push("Above LR50/LR100");
-  if (Math.abs(price - technicals.fibLevel) / Math.max(price, 0.01) <= 0.02)
-    reasons.push("Holding 0.5 Fib");
-  if (num(item.volumeRatio, 1) >= 1.4) reasons.push("Strong volume");
-  if (pillars.technical >= 7.2) reasons.push("Technical momentum");
-  if (pillars.environment >= 6.8) reasons.push("Supportive environment");
-  if (pillars.fundamental <= 5.8) reasons.push("Weak fundamentals");
-  if (riskLabel === "High" || riskLabel === "Extreme") reasons.push("High volatility risk");
-  if (riskLabel === "Unknown") reasons.push("Risk inputs incomplete");
+  reasons.push(`${item.symbol} ${profile.sector} profile`);
 
-  if (!reasons.length) reasons.push("Mixed setup");
-  if (reasons.length === 1) reasons.push("Needs confirmation");
+  if (price >= technicals.lr50 && price >= technicals.lr100) reasons.push("Above LR50/LR100 trend");
+  if (Math.abs(price - technicals.fibLevel) / Math.max(price, 0.01) <= 0.02)
+    reasons.push("Holding key fib retracement");
+  if (num(item.volumeRatio, 1) >= 1.4) reasons.push("Relative volume expansion");
+
+  if (profile.speculative) {
+    reasons.push("Speculative beta requires tighter risk");
+  } else if (pillars.fundamental >= 7.4) {
+    reasons.push("Institutional-quality fundamentals");
+  }
+
+  if (pillars.fundamental <= 5.9) reasons.push("Fundamentals lag peers");
+  if (riskLabel === "High" || riskLabel === "Extreme") reasons.push("Volatility risk elevated");
+  if (riskLabel === "Unknown") reasons.push("Risk inputs incomplete");
 
   return reasons.slice(0, 3);
 }
 
 function computeConfidence(
   horizons: number[],
-  item: Item
+  item: Item,
+  technicals: TechnicalFactors,
+  riskLabel: RiskLabel
 ): number {
   const mean = horizons.reduce((sum, x) => sum + x, 0) / horizons.length;
   const variance = horizons.reduce((sum, x) => sum + (x - mean) ** 2, 0) / horizons.length;
-  const spreadPenalty = Math.sqrt(variance) * 0.9;
+  const spreadPenalty = Math.sqrt(variance) * 1.1;
 
   const qualitySignals = [
     num(item.price) > 0,
-    num(item.support) > 0,
-    num(item.resistance) > 0,
-    num(item.rsi) > 0,
-    num(item.volumeRatio) > 0,
-    num(item.technicalScore) > 0,
-    num(item.whaleScore) > 0,
-    num(item.macroScore) > 0,
-    num(item.politicalScore) > 0,
+    item.support !== undefined,
+    item.resistance !== undefined,
+    item.rsi !== undefined,
+    item.volumeRatio !== undefined,
+    item.technicalScore !== undefined,
+    item.whaleScore !== undefined,
+    item.macroScore !== undefined,
+    item.politicalScore !== undefined,
+    item.atrPercent !== undefined,
+    item.priceVolatility !== undefined,
+    item.ivPercentile !== undefined,
   ];
 
   const completeness = qualitySignals.filter(Boolean).length / qualitySignals.length;
+  const volatilityPenalty = clamp10((technicals.atrPercent * 0.42 + technicals.volatilityPercent * 0.33) / 2.6);
+  const unknownPenalty = riskLabel === "Unknown" ? 0.45 : 0;
 
-  return clamp10(5.2 + completeness * 3.8 - spreadPenalty);
+  return clamp10(4.7 + completeness * 4.2 - spreadPenalty - volatilityPenalty * 0.34 - unknownPenalty);
+}
+
+function diversifyBestStrategy(
+  horizons: Array<{ horizon: HorizonKey; strategy: Strategy; score: number }>,
+  riskLabel: RiskLabel,
+  profile: TickerProfile
+): Strategy {
+  const sorted = [...horizons].sort((a, b) => b.score - a.score);
+  const leader = sorted[0];
+
+  if (!leader) return "Watch / Avoid";
+
+  if (riskLabel === "High" || riskLabel === "Extreme") {
+    return leader.score >= 7.2 ? "Watch / Starter" : "Watch / Avoid";
+  }
+
+  if (profile.speculative) {
+    if (leader.horizon === "swing" && leader.score >= 8.3) return "Buy Calls";
+    return leader.score >= 7.1 ? "Watch / Starter" : "Watch / Avoid";
+  }
+
+  if (leader.horizon === "oneYear" || leader.horizon === "sixMonth") {
+    return leader.score >= 8 ? "Buy Shares" : "Watch / Starter";
+  }
+
+  if (leader.horizon === "swing" && leader.score >= 8.5) {
+    return "Buy Shares + Calls";
+  }
+
+  return leader.strategy;
 }
 
 export function computeMetrics(item: Item): RowMetrics {
-  const { pillars, technicals } = computePillars(item);
+  const { pillars, technicals, profile } = computePillars(item);
   const { riskScore, riskLabel } = computeRisk(item, technicals);
 
-  const swing = weightedHorizonScore("swing", pillars);
-  const threeMonth = weightedHorizonScore("threeMonth", pillars);
-  const sixMonth = weightedHorizonScore("sixMonth", pillars);
-  const oneYear = weightedHorizonScore("oneYear", pillars);
+  const swing = weightedHorizonScore("swing", pillars, profile);
+  const threeMonth = weightedHorizonScore("threeMonth", pillars, profile);
+  const sixMonth = weightedHorizonScore("sixMonth", pillars, profile);
+  const oneYear = weightedHorizonScore("oneYear", pillars, profile);
 
   const swingSignal = scoreLabel(swing);
   const threeMonthSignal = scoreLabel(threeMonth);
@@ -478,14 +609,14 @@ export function computeMetrics(item: Item): RowMetrics {
   const oneYearStrategy = getStrategy("oneYear", oneYear, riskLabel, technicals);
 
   const horizonRanked = [
-    { strategy: swingStrategy, score: swing },
-    { strategy: threeMonthStrategy, score: threeMonth },
-    { strategy: sixMonthStrategy, score: sixMonth },
-    { strategy: oneYearStrategy, score: oneYear },
-  ].sort((a, b) => b.score - a.score);
+    { horizon: "swing" as HorizonKey, strategy: swingStrategy, score: swing },
+    { horizon: "threeMonth" as HorizonKey, strategy: threeMonthStrategy, score: threeMonth },
+    { horizon: "sixMonth" as HorizonKey, strategy: sixMonthStrategy, score: sixMonth },
+    { horizon: "oneYear" as HorizonKey, strategy: oneYearStrategy, score: oneYear },
+  ];
 
-  const bestStrategy = horizonRanked[0]?.strategy ?? "Watch / Avoid";
-  const confidence = computeConfidence([swing, threeMonth, sixMonth, oneYear], item);
+  const bestStrategy = diversifyBestStrategy(horizonRanked, riskLabel, profile);
+  const confidence = computeConfidence([swing, threeMonth, sixMonth, oneYear], item, technicals, riskLabel);
 
   const whaleV2 = Math.round(
     clamp(
@@ -513,17 +644,17 @@ export function computeMetrics(item: Item): RowMetrics {
 
   const hotSetup =
     num(item.price) > 0 &&
-    swing >= 7.6 &&
-    confidence >= 7 &&
+    swing >= 7.7 &&
+    confidence >= 6.8 &&
     (riskLabel === "Low" || riskLabel === "Medium");
 
   const redFlag =
     num(item.price) <= 0 ||
     riskLabel === "Extreme" ||
-    (riskLabel === "High" && swing < 6.8) ||
+    (riskLabel === "High" && swing < 6.9) ||
     item.bias === "Bearish";
 
-  const why = buildWhy(item, pillars, technicals, riskLabel);
+  const why = buildWhy(item, pillars, technicals, riskLabel, profile);
   const marketRegime = getMarketRegime(pillars);
 
   const notes: string[] = [...why];
