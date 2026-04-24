@@ -7,7 +7,7 @@ import type {
 
 import { clamp, formatPrice, num } from "../app/lib/helpers";
 
-export type RiskLabel = "Low" | "Medium" | "High" | "Extreme";
+export type RiskLabel = "Unknown" | "Low" | "Medium" | "High" | "Extreme";
 
 type PillarScores = {
   technical: number;
@@ -207,7 +207,25 @@ export function computeRisk(
 ): { riskScore: number; riskLabel: RiskLabel } {
   const price = Math.max(num(item.price), 0.01);
   const baseBeta = HIGH_BETA_SYMBOLS.has(item.symbol.toUpperCase()) ? 2.1 : 1.1;
-  const betaProxy = num(item.betaProxy, baseBeta + Math.max(0, num(item.volumeRatio, 1) - 1) * 0.35);
+
+  const hasRiskInputs =
+    item.atrPercent !== undefined ||
+    item.betaProxy !== undefined ||
+    item.priceVolatility !== undefined ||
+    item.ivPercentile !== undefined ||
+    item.earningsDays !== undefined;
+
+  if (!hasRiskInputs) {
+    return {
+      riskScore: 50,
+      riskLabel: "Unknown",
+    };
+  }
+
+  const betaProxy = num(
+    item.betaProxy,
+    baseBeta + Math.max(0, num(item.volumeRatio, 1) - 1) * 0.35
+  );
 
   const volatilityPercent = Math.max(technicals.volatilityPercent, 0);
   const atrPercent = Math.max(technicals.atrPercent, 0);
@@ -232,7 +250,13 @@ export function computeRisk(
 
   const riskScore = Math.round(risk10 * 10);
   const riskLabel: RiskLabel =
-    risk10 >= 8.8 ? "Extreme" : risk10 >= 7.1 ? "High" : risk10 >= 4.8 ? "Medium" : "Low";
+    risk10 >= 8.8
+      ? "Extreme"
+      : risk10 >= 7.1
+      ? "High"
+      : risk10 >= 4.8
+      ? "Medium"
+      : "Low";
 
   return { riskScore, riskLabel };
 }
@@ -294,7 +318,15 @@ export function getStrategy(
   riskLabel: RiskLabel,
   technicals: TechnicalFactors
 ): Strategy {
+  if (riskLabel === "Unknown") {
+    return score >= 7.8 ? "Watch / Starter" : "Watch / Avoid";
+  }
+
   const allowCalls = callsAllowed(score, riskLabel, technicals);
+
+  if (score >= 8.8 && riskLabel === "Low" && technicals.lr50Slope > 0.35) {
+    return "Buy Calls";
+  }
 
   if (score >= 8 && riskLabel !== "High" && riskLabel !== "Extreme") {
     return allowCalls ? "Buy Shares + Calls" : "Buy Shares";
@@ -389,10 +421,14 @@ function buildWhy(
   if (Math.abs(price - technicals.fibLevel) / Math.max(price, 0.01) <= 0.02)
     reasons.push("Holding 0.5 Fib");
   if (num(item.volumeRatio, 1) >= 1.4) reasons.push("Strong volume");
+  if (pillars.technical >= 7.2) reasons.push("Technical momentum");
+  if (pillars.environment >= 6.8) reasons.push("Supportive environment");
   if (pillars.fundamental <= 5.8) reasons.push("Weak fundamentals");
   if (riskLabel === "High" || riskLabel === "Extreme") reasons.push("High volatility risk");
+  if (riskLabel === "Unknown") reasons.push("Risk inputs incomplete");
 
   if (!reasons.length) reasons.push("Mixed setup");
+  if (reasons.length === 1) reasons.push("Needs confirmation");
 
   return reasons.slice(0, 3);
 }

@@ -31,7 +31,8 @@ function signalColor(signal: string) {
   return "#ef4444";
 }
 
-function riskColor(risk: "Low" | "Medium" | "High" | "Extreme") {
+function riskColor(risk: "Unknown" | "Low" | "Medium" | "High" | "Extreme") {
+  if (risk === "Unknown") return "#94a3b8";
   if (risk === "Low") return "#22c55e";
   if (risk === "Medium") return "#f59e0b";
   if (risk === "High") return "#ef4444";
@@ -133,6 +134,17 @@ export default function DashboardClientShell() {
 
         const mapped: Item[] = data
           .map((row: Record<string, unknown>) => {
+            const getValue = (...keys: string[]) => {
+              for (const key of keys) {
+                if (row[key] !== undefined) return row[key];
+              }
+              return undefined;
+            };
+            const toOptionalNumber = (...keys: string[]) => {
+              const value = getValue(...keys);
+              return value === undefined ? undefined : num(value);
+            };
+
             const rawBias = row.bias;
             const bias: Item["bias"] =
               rawBias === "Bullish" || rawBias === "Bearish" || rawBias === "Watch"
@@ -142,26 +154,29 @@ export default function DashboardClientShell() {
             return {
               symbol: typeof row.symbol === "string" ? row.symbol : "",
               bias,
-              price: num(row.price),
-              support: num(row.support),
-              resistance: num(row.resistance),
-              rsi: num(row.rsi, 50),
-              volumeRatio: num(row.volumeRatio, 1),
-              technicalScore: num(row.technicalScore, 70),
-              whaleScore: num(row.whaleScore, 60),
-              macroScore: num(row.macroScore, 60),
-              politicalScore: num(row.politicalScore, 60),
-              lr50: num(row.lr50),
-              lr50Slope: num(row.lr50Slope),
-              lr100: num(row.lr100),
-              lr100Slope: num(row.lr100Slope),
-              fibSupport: num(row.fibSupport),
-              fibResistance: num(row.fibResistance),
-              atrPercent: num(row.atrPercent),
-              betaProxy: num(row.betaProxy),
-              priceVolatility: num(row.priceVolatility),
-              ivPercentile: num(row.ivPercentile),
-              earningsDays: num(row.earningsDays),
+              price: num(getValue("price", "last_price")),
+              support: num(getValue("support")),
+              resistance: num(getValue("resistance")),
+              rsi: num(getValue("rsi"), 50),
+              volumeRatio: num(getValue("volumeRatio", "volume_ratio"), 1),
+              technicalScore: num(
+                getValue("technicalScore", "technical_score", "tech"),
+                70
+              ),
+              whaleScore: num(getValue("whaleScore", "whale_score", "intel"), 60),
+              macroScore: num(getValue("macroScore", "macro_score"), 60),
+              politicalScore: num(getValue("politicalScore", "political_score", "env"), 60),
+              lr50: toOptionalNumber("lr50", "lr_50"),
+              lr50Slope: toOptionalNumber("lr50Slope", "lr_50_slope"),
+              lr100: toOptionalNumber("lr100", "lr_100"),
+              lr100Slope: toOptionalNumber("lr100Slope", "lr_100_slope"),
+              fibSupport: toOptionalNumber("fibSupport", "fib_support"),
+              fibResistance: toOptionalNumber("fibResistance", "fib_resistance"),
+              atrPercent: toOptionalNumber("atrPercent", "atr_percent"),
+              betaProxy: toOptionalNumber("betaProxy", "beta_proxy"),
+              priceVolatility: toOptionalNumber("priceVolatility", "price_volatility"),
+              ivPercentile: toOptionalNumber("ivPercentile", "iv_percentile"),
+              earningsDays: toOptionalNumber("earningsDays", "earnings_days"),
               notes: Array.isArray(row.notes)
                 ? row.notes.filter((note): note is string => typeof note === "string")
                 : [],
@@ -196,14 +211,17 @@ export default function DashboardClientShell() {
   const selectedItem = selectedRow?.item ?? null;
   const selectedMetrics = selectedRow?.metrics ?? null;
 
-  const hotRows = useMemo(() => rows.filter((x) => x.metrics.hotSetup), [rows]);
   const redRows = useMemo(() => rows.filter((x) => x.metrics.redFlag), [rows]);
+  const unknownRiskRows = useMemo(
+    () => rows.filter((x) => x.metrics.riskLabel === "Unknown"),
+    [rows]
+  );
 
   const topThree = useMemo(
     () =>
       [...rows]
         .filter((x) => num(x.item.price) > 0)
-        .sort((a, b) => b.metrics.opportunityScore - a.metrics.opportunityScore)
+        .sort((a, b) => b.metrics.swing - a.metrics.swing)
         .slice(0, 3),
     [rows]
   );
@@ -215,10 +233,10 @@ export default function DashboardClientShell() {
     );
   }, [rows]);
 
-  const avgOpportunity = useMemo(() => {
+  const avgConfidence = useMemo(() => {
     if (!rows.length) return 0;
     return Math.round(
-      rows.reduce((sum, row) => sum + row.metrics.opportunityScore, 0) /
+      rows.reduce((sum, row) => sum + row.metrics.confidence, 0) /
         rows.length
     );
   }, [rows]);
@@ -850,16 +868,16 @@ export default function DashboardClientShell() {
         }}
       >
         <div style={{ ...panelStyle(), padding: 16 }}>
-          <div style={{ fontSize: 12, color: "#94a3b8" }}>Hot Setups</div>
-          <div style={{ fontSize: 30, fontWeight: 900, color: "#22c55e" }}>
-            {hotRows.length}
+          <div style={{ fontSize: 12, color: "#94a3b8" }}>Red Flags</div>
+          <div style={{ fontSize: 30, fontWeight: 900, color: "#ef4444" }}>
+            {redRows.length}
           </div>
         </div>
 
         <div style={{ ...panelStyle(), padding: 16 }}>
-          <div style={{ fontSize: 12, color: "#94a3b8" }}>Red Flags</div>
-          <div style={{ fontSize: 30, fontWeight: 900, color: "#ef4444" }}>
-            {redRows.length}
+          <div style={{ fontSize: 12, color: "#94a3b8" }}>Unknown Risk</div>
+          <div style={{ fontSize: 30, fontWeight: 900, color: "#94a3b8" }}>
+            {unknownRiskRows.length}
           </div>
         </div>
 
@@ -871,9 +889,9 @@ export default function DashboardClientShell() {
         </div>
 
         <div style={{ ...panelStyle(), padding: 16 }}>
-          <div style={{ fontSize: 12, color: "#94a3b8" }}>Avg Opportunity</div>
+          <div style={{ fontSize: 12, color: "#94a3b8" }}>Avg Confidence</div>
           <div style={{ fontSize: 30, fontWeight: 900, color: "#38bdf8" }}>
-            {avgOpportunity}
+            {avgConfidence}
           </div>
         </div>
       </div>
@@ -915,11 +933,11 @@ export default function DashboardClientShell() {
                 <div
                   style={{
                     fontSize: 13,
-                    color: glowColor(metrics.opportunityScore),
+                    color: signalColor(metrics.swingSignal),
                     fontWeight: 800,
                   }}
                 >
-                  {metrics.opportunityScore}
+                  Swing {metrics.swing.toFixed(1)}
                 </div>
               </div>
               <div
@@ -1041,8 +1059,12 @@ export default function DashboardClientShell() {
           >
             {[
               ["Price", `$${selectedItem.price.toFixed(2)}`, "#f8fafc"],
-              ["Whale V2", selectedMetrics.whaleV2, glowColor(selectedMetrics.whaleV2)],
               ["Risk", selectedMetrics.riskLabel, riskColor(selectedMetrics.riskLabel)],
+              [
+                "Confidence",
+                selectedMetrics.confidence.toFixed(1),
+                glowColor(selectedMetrics.confidence * 10),
+              ],
               ["Regime", selectedMetrics.marketRegime, "#f8fafc"],
               [
                 "Momentum",
@@ -1206,9 +1228,9 @@ export default function DashboardClientShell() {
           </div>
 
           <div style={{ ...panelStyle(), padding: 18 }}>
-            <h3 style={{ marginTop: 0, color: "#f8fafc" }}>Hot Setups</h3>
-            {hotRows.length ? (
-              hotRows.slice(0, 5).map(({ item, metrics }) => (
+            <h3 style={{ marginTop: 0, color: "#f8fafc" }}>Focus List</h3>
+            {topThree.length ? (
+              topThree.map(({ item, metrics }) => (
                 <div
                   key={item.symbol}
                   onClick={() => setSelectedSymbol(item.symbol)}
@@ -1224,16 +1246,16 @@ export default function DashboardClientShell() {
                   <div>
                     <div style={{ fontWeight: 800, color: "#f8fafc" }}>{item.symbol}</div>
                     <div style={{ fontSize: 12, color: "#94a3b8" }}>
-                      {metrics.swingSignal} • {metrics.bestStrategy}
+                      {metrics.swingSignal} • {metrics.bestStrategy} • Risk {metrics.riskLabel}
                     </div>
                   </div>
                   <div style={{ fontWeight: 800, color: "#22c55e" }}>
-                    {metrics.opportunityScore}
+                    {metrics.swing.toFixed(1)}
                   </div>
                 </div>
               ))
             ) : (
-              <p style={{ color: "#94a3b8" }}>No hot setups yet.</p>
+              <p style={{ color: "#94a3b8" }}>No ranked symbols yet.</p>
             )}
           </div>
 
