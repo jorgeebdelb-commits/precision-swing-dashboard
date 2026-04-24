@@ -12,6 +12,17 @@ export type WatchlistItem = {
   whaleScore: number;
   macroScore: number;
   politicalScore: number;
+  lr50?: number;
+  lr50Slope?: number;
+  lr100?: number;
+  lr100Slope?: number;
+  fibSupport?: number;
+  fibResistance?: number;
+  atrPercent?: number;
+  betaProxy?: number;
+  priceVolatility?: number;
+  ivPercentile?: number;
+  earningsDays?: number;
   notes: string[];
 };
 

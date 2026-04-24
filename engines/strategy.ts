@@ -7,15 +7,25 @@ import type {
 
 import { clamp, formatPrice, num } from "../app/lib/helpers";
 
-import {
-  computeWhaleV2,
-  getBaseSignal,
-  getPricePositionScore,
-  getRSIMomentumScore,
-  normalizeVolumeRatio,
-} from "./scoring";
+export type RiskLabel = "Low" | "Medium" | "High" | "Extreme";
 
-export type RiskLabel = "Low" | "Medium" | "High";
+type PillarScores = {
+  technical: number;
+  fundamental: number;
+  intelligence: number;
+  environment: number;
+};
+
+type TechnicalFactors = {
+  lr50: number;
+  lr100: number;
+  lr50Slope: number;
+  lr100Slope: number;
+  fibLevel: number;
+  atrPercent: number;
+  volatilityPercent: number;
+  trendAligned: boolean;
+};
 
 export type TradePlan = {
   entryZone: string;
@@ -29,12 +39,18 @@ export type TradePlan = {
 
 export type RowMetrics = {
   whaleV2: number;
+  technical: number;
+  fundamental: number;
+  intelligence: number;
+  environment: number;
   riskScore: number;
   riskLabel: RiskLabel;
   swing: number;
   threeMonth: number;
   sixMonth: number;
   oneYear: number;
+  confidence: number;
+  why: string[];
   swingSignal: string;
   threeMonthSignal: string;
   sixMonthSignal: string;
@@ -59,97 +75,246 @@ export type RowMetrics = {
   hotSetup: boolean;
 };
 
+const HIGH_BETA_SYMBOLS = new Set(["TSLA", "MARA", "IREN", "RGTI"]);
+
+const clamp10 = (value: number): number =>
+  Math.max(1, Math.min(10, Math.round(value * 10) / 10));
+
+const scaleTo10 = (value: number): number => clamp10(clamp(value) / 10);
+
+const scoreLabel = (score: number): string => {
+  if (score >= 8.5) return "Strong Buy";
+  if (score >= 7) return "Buy";
+  if (score >= 6) return "Watch";
+  return "Avoid";
+};
+
+const symbolSeed = (symbol: string): number => {
+  return symbol
+    .split("")
+    .reduce((sum, char, idx) => sum + char.charCodeAt(0) * (idx + 1), 0);
+};
+
+function buildTechnicalFactors(item: Item): TechnicalFactors {
+  const price = num(item.price);
+  const support = num(item.support, price * 0.95);
+  const resistance = Math.max(num(item.resistance, price * 1.05), support + 0.01);
+  const width = Math.max(resistance - support, Math.max(price * 0.02, 0.25));
+
+  const trendBias =
+    (num(item.rsi, 50) - 50) / 50 +
+    (num(item.volumeRatio, 1) - 1) * 0.35 +
+    (item.bias === "Bullish" ? 0.2 : item.bias === "Bearish" ? -0.2 : 0);
+
+  const lr50 = num(item.lr50, price * (0.985 + trendBias * 0.025));
+  const lr100 = num(item.lr100, price * (0.965 + trendBias * 0.03));
+  const lr50Slope = num(item.lr50Slope, trendBias * 4);
+  const lr100Slope = num(item.lr100Slope, trendBias * 2.4);
+
+  const fibLow = support;
+  const fibHigh = resistance;
+  const fibRange = Math.max(fibHigh - fibLow, 0.01);
+  const fib50 = fibHigh - fibRange * 0.5;
+
+  const fibLevelRaw = num(item.fibSupport, fib50);
+  const fibLevel = Math.max(fibLow, Math.min(fibHigh, fibLevelRaw));
+
+  const atrPercent = num(item.atrPercent, (width / Math.max(price, 0.01)) * 65);
+  const volatilityPercent = num(
+    item.priceVolatility,
+    (width / Math.max(price, 0.01)) * 100
+  );
+
+  const trendAligned = lr50 > lr100 && lr50Slope > -0.1 && lr100Slope > -0.2;
+
+  return {
+    lr50,
+    lr100,
+    lr50Slope,
+    lr100Slope,
+    fibLevel,
+    atrPercent,
+    volatilityPercent,
+    trendAligned,
+  };
+}
+
+function computePillars(item: Item): { pillars: PillarScores; technicals: TechnicalFactors } {
+  const t = buildTechnicalFactors(item);
+  const price = num(item.price);
+
+  const lr50Distance = (price - t.lr50) / Math.max(price, 0.01);
+  const lr100Distance = (price - t.lr100) / Math.max(price, 0.01);
+  const fibDistance = Math.abs(price - t.fibLevel) / Math.max(price, 0.01);
+
+  const lr50ValueScore = clamp10(6 + lr50Distance * 55);
+  const lr100ValueScore = clamp10(6 + lr100Distance * 55);
+  const slopeScore = clamp10(5 + t.lr50Slope * 0.65 + t.lr100Slope * 0.45);
+  const priceVsLrScore = clamp10(5 + (lr50Distance + lr100Distance) * 35);
+  const alignmentScore = t.trendAligned ? 8.4 : 4.9;
+  const fibScore = clamp10(8.4 - fibDistance * 120);
+  const rsiScore = clamp10(10 - Math.abs(num(item.rsi, 50) - 58) / 6.5);
+  const volumeScore = clamp10(4.6 + num(item.volumeRatio, 1) * 2.25);
+  const atrScore = clamp10(10 - t.atrPercent / 1.8);
+
+  const technical = clamp10(
+    lr50ValueScore * 0.13 +
+      lr100ValueScore * 0.12 +
+      slopeScore * 0.15 +
+      priceVsLrScore * 0.15 +
+      alignmentScore * 0.14 +
+      fibScore * 0.12 +
+      rsiScore * 0.08 +
+      volumeScore * 0.06 +
+      atrScore * 0.05
+  );
+
+  const fundamental = clamp10(
+    scaleTo10(num(item.macroScore, 58)) * 0.45 +
+      scaleTo10(num(item.politicalScore, 55)) * 0.25 +
+      scaleTo10(num(item.technicalScore, 60)) * 0.2 +
+      clamp10(10 - t.volatilityPercent / 2.7) * 0.1
+  );
+
+  const intelligence = clamp10(
+    scaleTo10(num(item.whaleScore, 60)) * 0.5 +
+      volumeScore * 0.2 +
+      rsiScore * 0.1 +
+      (item.bias === "Bullish" ? 8.2 : item.bias === "Bearish" ? 3.9 : 5.9) * 0.2
+  );
+
+  const environment = clamp10(
+    scaleTo10(num(item.politicalScore, 55)) * 0.35 +
+      scaleTo10(num(item.macroScore, 58)) * 0.35 +
+      clamp10(10 - t.atrPercent / 2.2) * 0.2 +
+      (item.bias === "Bearish" ? 4.4 : 6.6) * 0.1
+  );
+
+  return {
+    pillars: {
+      technical,
+      fundamental,
+      intelligence,
+      environment,
+    },
+    technicals: t,
+  };
+}
+
 export function computeRisk(
   item: Item,
-  whaleV2: number
+  technicals: TechnicalFactors
 ): { riskScore: number; riskLabel: RiskLabel } {
-  const volumeRisk = Math.min(
-    100,
-    Math.max(0, num(item.volumeRatio, 1) * 24)
+  const price = Math.max(num(item.price), 0.01);
+  const baseBeta = HIGH_BETA_SYMBOLS.has(item.symbol.toUpperCase()) ? 2.1 : 1.1;
+  const betaProxy = num(item.betaProxy, baseBeta + Math.max(0, num(item.volumeRatio, 1) - 1) * 0.35);
+
+  const volatilityPercent = Math.max(technicals.volatilityPercent, 0);
+  const atrPercent = Math.max(technicals.atrPercent, 0);
+
+  const seed = symbolSeed(item.symbol);
+  const earningsDays = num(item.earningsDays, (seed % 36) + 5);
+  const earningsRisk = earningsDays <= 5 ? 9.5 : earningsDays <= 10 ? 7.3 : 4.1;
+
+  const ivPercentile = num(
+    item.ivPercentile,
+    Math.min(100, 35 + volatilityPercent * 6 + Math.max(0, betaProxy - 1) * 12)
   );
 
-  const structureRisk = Math.max(
-    0,
-    100 - (clamp(item.technicalScore) * 0.55 + whaleV2 * 0.45)
+  const risk10 = clamp10(
+    atrPercent * 0.16 +
+      volatilityPercent * 0.24 +
+      betaProxy * 1.45 +
+      earningsRisk * 0.9 +
+      ivPercentile * 0.028 +
+      (price < 5 ? 0.8 : 0)
   );
 
-  const biasRisk =
-    item.bias === "Bearish"
-      ? 18
-      : item.bias === "Watch"
-      ? 8
-      : 0;
-
-  const zeroPriceRisk = num(item.price) <= 0 ? 20 : 0;
-
-  const riskScore = Math.round(
-    clamp(
-      volumeRisk * 0.38 +
-        structureRisk * 0.42 +
-        biasRisk +
-        zeroPriceRisk
-    )
-  );
-
+  const riskScore = Math.round(risk10 * 10);
   const riskLabel: RiskLabel =
-    riskScore >= 67 ? "High" : riskScore >= 45 ? "Medium" : "Low";
+    risk10 >= 8.8 ? "Extreme" : risk10 >= 7.1 ? "High" : risk10 >= 4.8 ? "Medium" : "Low";
 
   return { riskScore, riskLabel };
 }
 
-export function getStrategy(
-  horizon: HorizonKey,
-  score: number,
-  riskLabel: RiskLabel,
-  bias: Item["bias"],
-  whaleV2: number
-): Strategy {
-  const bearish = bias === "Bearish";
-
+function weightedHorizonScore(horizon: HorizonKey, pillars: PillarScores): number {
   if (horizon === "swing") {
-    if (bearish && score <= 55) return "Buy Puts";
-    if (score >= 84 && riskLabel !== "High") return "Buy Calls";
-    if (score >= 72 && whaleV2 >= 68) return "Buy Shares + Calls";
-    if (score >= 62) return "Buy Shares";
-    if (score < 50) return "Buy Puts";
-    return "Watch";
+    return clamp10(
+      pillars.technical * 0.5 +
+        pillars.intelligence * 0.25 +
+        pillars.environment * 0.15 +
+        pillars.fundamental * 0.1
+    );
   }
 
   if (horizon === "threeMonth") {
-    if (bearish && score < 52) return "Buy Puts";
-    if (score >= 82 && riskLabel === "Low") return "Buy Shares + Calls";
-    if (score >= 72) return "Buy Shares";
-    if (score < 48) return "Buy Puts";
-    return "Watch";
+    return clamp10(
+      pillars.technical * 0.3 +
+        pillars.fundamental * 0.3 +
+        pillars.intelligence * 0.25 +
+        pillars.environment * 0.15
+    );
   }
 
   if (horizon === "sixMonth") {
-    if (bearish && score < 45) return "Buy Puts";
-    if (score >= 80 && riskLabel !== "High") return "Buy Shares";
-    if (score >= 70) return "Buy Shares + Calls";
-    if (score < 45) return "Buy Puts";
-    return "Watch";
+    return clamp10(
+      pillars.fundamental * 0.4 +
+        pillars.technical * 0.25 +
+        pillars.environment * 0.2 +
+        pillars.intelligence * 0.15
+    );
   }
 
-  if (bearish && score < 42) return "Buy Puts";
-  if (score >= 78) return "Buy Shares";
-  if (score >= 68 && riskLabel === "Low") return "Buy Shares + Calls";
-  if (score < 42) return "Buy Puts";
-  return "Watch";
+  return clamp10(
+    pillars.fundamental * 0.45 +
+      pillars.environment * 0.25 +
+      pillars.technical * 0.2 +
+      pillars.intelligence * 0.1
+  );
+}
+
+function callsAllowed(
+  score: number,
+  riskLabel: RiskLabel,
+  technicals: TechnicalFactors
+): boolean {
+  return (
+    score >= 8 &&
+    riskLabel !== "High" &&
+    riskLabel !== "Extreme" &&
+    technicals.atrPercent <= 7.5 &&
+    technicals.volatilityPercent <= 9 &&
+    technicals.trendAligned
+  );
+}
+
+export function getStrategy(
+  _horizon: HorizonKey,
+  score: number,
+  riskLabel: RiskLabel,
+  technicals: TechnicalFactors
+): Strategy {
+  const allowCalls = callsAllowed(score, riskLabel, technicals);
+
+  if (score >= 8 && riskLabel !== "High" && riskLabel !== "Extreme") {
+    return allowCalls ? "Buy Shares + Calls" : "Buy Shares";
+  }
+
+  if (score >= 7) return "Buy Shares";
+  if (score >= 6) return "Watch / Starter";
+  return "Watch / Avoid";
 }
 
 export function getMarketRegime(
-  item: Item,
-  whaleV2: number
+  pillars: PillarScores
 ): MarketRegime {
   const score =
-    clamp(item.macroScore) * 0.35 +
-    clamp(item.technicalScore) * 0.3 +
-    whaleV2 * 0.2 +
-    getRSIMomentumScore(num(item.rsi, 50)) * 0.15;
+    pillars.environment * 0.4 +
+    pillars.fundamental * 0.35 +
+    pillars.technical * 0.25;
 
-  if (score >= 74) return "Risk-On";
-  if (score >= 56) return "Balanced";
+  if (score >= 7.5) return "Risk-On";
+  if (score >= 5.8) return "Balanced";
   return "Risk-Off";
 }
 
@@ -171,7 +336,7 @@ export function computeTradePlan(
       target2: "--",
       positionSizing: "Wait for live price",
       callPlan: "Calls: wait for live quote",
-      putPlan: "Puts: wait for live quote",
+      putPlan: "Puts: N/A",
     };
   }
 
@@ -188,175 +353,123 @@ export function computeTradePlan(
   const target1 = r + width * 0.4;
   const target2 = r + width * 0.85;
 
-  const entryZone =
-    swingStrategy === "Buy Puts"
-      ? `${formatPrice(r - width * 0.08)} - ${formatPrice(r + width * 0.08)}`
-      : `${formatPrice(pullbackEntry)} - ${formatPrice(
-          Math.min(breakoutEntry, r)
-        )}`;
-
   let positionSizing = "2% starter";
-  if (riskLabel === "Low" && swing >= 82) positionSizing = "6%-8% full";
-  else if (riskLabel === "Low" && swing >= 72) positionSizing = "5%-6% core";
-  else if (riskLabel === "Medium" && swing >= 72) positionSizing = "3%-5% starter";
-  else if (riskLabel === "High" && swing >= 72) positionSizing = "2%-3% tactical";
+  if (riskLabel === "Low" && swing >= 8) positionSizing = "6%-8% full";
+  else if (riskLabel === "Low" && swing >= 7) positionSizing = "5%-6% core";
+  else if (riskLabel === "Medium" && swing >= 7) positionSizing = "3%-5% starter";
+  else if ((riskLabel === "High" || riskLabel === "Extreme") && swing >= 7)
+    positionSizing = "1%-3% tactical";
 
   const callPlan =
-    swingStrategy === "Buy Calls" || swingStrategy === "Buy Shares + Calls"
-      ? "Calls: 30-45 DTE ATM or 1 strike ITM"
-      : "Calls: not preferred";
-
-  const putPlan =
-    swingStrategy === "Buy Puts"
-      ? "Puts: 21-45 DTE ATM or slight ITM"
-      : "Puts: not preferred";
+    swingStrategy === "Buy Shares + Calls"
+      ? "Calls: 30-45 DTE ATM / slight ITM"
+      : "Calls: only if trend + vol align";
 
   return {
-    entryZone,
+    entryZone: `${formatPrice(pullbackEntry)} - ${formatPrice(Math.min(breakoutEntry, r))}`,
     stopLoss: formatPrice(stop),
     target1: formatPrice(target1),
     target2: formatPrice(target2),
     positionSizing,
     callPlan,
-    putPlan,
+    putPlan: "Puts: N/A",
   };
 }
 
+function buildWhy(
+  item: Item,
+  pillars: PillarScores,
+  technicals: TechnicalFactors,
+  riskLabel: RiskLabel
+): string[] {
+  const price = num(item.price);
+  const reasons: string[] = [];
+
+  if (price >= technicals.lr50 && price >= technicals.lr100) reasons.push("Above LR50/LR100");
+  if (Math.abs(price - technicals.fibLevel) / Math.max(price, 0.01) <= 0.02)
+    reasons.push("Holding 0.5 Fib");
+  if (num(item.volumeRatio, 1) >= 1.4) reasons.push("Strong volume");
+  if (pillars.fundamental <= 5.8) reasons.push("Weak fundamentals");
+  if (riskLabel === "High" || riskLabel === "Extreme") reasons.push("High volatility risk");
+
+  if (!reasons.length) reasons.push("Mixed setup");
+
+  return reasons.slice(0, 3);
+}
+
+function computeConfidence(
+  horizons: number[],
+  item: Item
+): number {
+  const mean = horizons.reduce((sum, x) => sum + x, 0) / horizons.length;
+  const variance = horizons.reduce((sum, x) => sum + (x - mean) ** 2, 0) / horizons.length;
+  const spreadPenalty = Math.sqrt(variance) * 0.9;
+
+  const qualitySignals = [
+    num(item.price) > 0,
+    num(item.support) > 0,
+    num(item.resistance) > 0,
+    num(item.rsi) > 0,
+    num(item.volumeRatio) > 0,
+    num(item.technicalScore) > 0,
+    num(item.whaleScore) > 0,
+    num(item.macroScore) > 0,
+    num(item.politicalScore) > 0,
+  ];
+
+  const completeness = qualitySignals.filter(Boolean).length / qualitySignals.length;
+
+  return clamp10(5.2 + completeness * 3.8 - spreadPenalty);
+}
+
 export function computeMetrics(item: Item): RowMetrics {
-  const whaleV2 = computeWhaleV2(item);
-  const { riskScore, riskLabel } = computeRisk(item, whaleV2);
+  const { pillars, technicals } = computePillars(item);
+  const { riskScore, riskLabel } = computeRisk(item, technicals);
 
-  const technical = clamp(item.technicalScore);
-  const macro = clamp(item.macroScore);
-  const political = clamp(item.politicalScore);
-  const rsiScore = getRSIMomentumScore(num(item.rsi, 50));
-  const volumeScore = normalizeVolumeRatio(num(item.volumeRatio, 1));
-  const pricePosition = getPricePositionScore(item);
-  const priceAlivePenalty = num(item.price) > 0 ? 0 : -18;
+  const swing = weightedHorizonScore("swing", pillars);
+  const threeMonth = weightedHorizonScore("threeMonth", pillars);
+  const sixMonth = weightedHorizonScore("sixMonth", pillars);
+  const oneYear = weightedHorizonScore("oneYear", pillars);
 
-  const momentumToday = Math.round(
-    clamp(
-      rsiScore * 0.35 +
-        volumeScore * 0.35 +
-        pricePosition * 0.2 +
-        (item.bias === "Bullish" ? 8 : item.bias === "Bearish" ? -8 : 0) +
-        priceAlivePenalty
-    )
-  );
+  const swingSignal = scoreLabel(swing);
+  const threeMonthSignal = scoreLabel(threeMonth);
+  const sixMonthSignal = scoreLabel(sixMonth);
+  const oneYearSignal = scoreLabel(oneYear);
 
-  const riskAdjustment =
-    riskLabel === "Low" ? 4 : riskLabel === "Medium" ? 0 : -7;
+  const swingStrategy = getStrategy("swing", swing, riskLabel, technicals);
+  const threeMonthStrategy = getStrategy("threeMonth", threeMonth, riskLabel, technicals);
+  const sixMonthStrategy = getStrategy("sixMonth", sixMonth, riskLabel, technicals);
+  const oneYearStrategy = getStrategy("oneYear", oneYear, riskLabel, technicals);
 
-  const swing = Math.round(
-    clamp(
-      technical * 0.22 +
-        whaleV2 * 0.24 +
-        rsiScore * 0.18 +
-        volumeScore * 0.16 +
-        pricePosition * 0.12 +
-        momentumToday * 0.08 +
-        riskAdjustment +
-        priceAlivePenalty * 0.3
-    )
-  );
-
-  const threeMonth = Math.round(
-    clamp(
-      technical * 0.24 +
-        whaleV2 * 0.22 +
-        macro * 0.2 +
-        political * 0.12 +
-        pricePosition * 0.08 +
-        rsiScore * 0.08 +
-        momentumToday * 0.06 +
-        riskAdjustment +
-        priceAlivePenalty * 0.15
-    )
-  );
-
-  const sixMonth = Math.round(
-    clamp(
-      macro * 0.28 +
-        whaleV2 * 0.22 +
-        technical * 0.18 +
-        political * 0.16 +
-        pricePosition * 0.06 +
-        rsiScore * 0.05 +
-        momentumToday * 0.05 +
-        riskAdjustment +
-        priceAlivePenalty * 0.08
-    )
-  );
-
-  const oneYear = Math.round(
-    clamp(
-      macro * 0.3 +
-        political * 0.2 +
-        technical * 0.16 +
-        whaleV2 * 0.18 +
-        pricePosition * 0.04 +
-        rsiScore * 0.06 +
-        momentumToday * 0.06 +
-        riskAdjustment +
-        priceAlivePenalty * 0.05
-    )
-  );
-
-  const swingSignal = getBaseSignal(swing);
-  const threeMonthSignal = getBaseSignal(threeMonth);
-  const sixMonthSignal = getBaseSignal(sixMonth);
-  const oneYearSignal = getBaseSignal(oneYear);
-
-  const swingStrategy = getStrategy(
-    "swing",
-    swing,
-    riskLabel,
-    item.bias,
-    whaleV2
-  );
-
-  const threeMonthStrategy = getStrategy(
-    "threeMonth",
-    threeMonth,
-    riskLabel,
-    item.bias,
-    whaleV2
-  );
-
-  const sixMonthStrategy = getStrategy(
-    "sixMonth",
-    sixMonth,
-    riskLabel,
-    item.bias,
-    whaleV2
-  );
-
-  const oneYearStrategy = getStrategy(
-    "oneYear",
-    oneYear,
-    riskLabel,
-    item.bias,
-    whaleV2
-  );
-
-  const bestHorizon = [
+  const horizonRanked = [
     { strategy: swingStrategy, score: swing },
     { strategy: threeMonthStrategy, score: threeMonth },
     { strategy: sixMonthStrategy, score: sixMonth },
     { strategy: oneYearStrategy, score: oneYear },
-  ].sort((a, b) => b.score - a.score)[0];
+  ].sort((a, b) => b.score - a.score);
 
-  const marketRegime = getMarketRegime(item, whaleV2);
+  const bestStrategy = horizonRanked[0]?.strategy ?? "Watch / Avoid";
+  const confidence = computeConfidence([swing, threeMonth, sixMonth, oneYear], item);
+
+  const whaleV2 = Math.round(
+    clamp(
+      (pillars.technical * 0.32 +
+        pillars.fundamental * 0.18 +
+        pillars.intelligence * 0.3 +
+        pillars.environment * 0.2) *
+        10
+    )
+  );
 
   const opportunityScore = Math.round(
     clamp(
-      swing * 0.34 +
-        threeMonth * 0.2 +
-        sixMonth * 0.18 +
-        oneYear * 0.12 +
-        whaleV2 * 0.1 +
-        momentumToday * 0.12 -
-        riskScore * 0.12
+      (swing * 0.35 +
+        threeMonth * 0.25 +
+        sixMonth * 0.2 +
+        oneYear * 0.2) *
+        10 -
+        riskScore * 0.18 +
+        confidence * 2
     )
   );
 
@@ -364,33 +477,38 @@ export function computeMetrics(item: Item): RowMetrics {
 
   const hotSetup =
     num(item.price) > 0 &&
-    swing >= 74 &&
-    whaleV2 >= 68 &&
-    momentumToday >= 65 &&
-    riskLabel !== "High";
+    swing >= 7.6 &&
+    confidence >= 7 &&
+    (riskLabel === "Low" || riskLabel === "Medium");
 
   const redFlag =
     num(item.price) <= 0 ||
-    (riskLabel === "High" && swing < 62) ||
+    riskLabel === "Extreme" ||
+    (riskLabel === "High" && swing < 6.8) ||
     item.bias === "Bearish";
 
-  const notes: string[] = [];
-  if (hotSetup) notes.push("Hot setup today");
-  if (whaleV2 >= 78) notes.push("Strong accumulation profile");
-  if (riskLabel === "High") notes.push("Size smaller due to elevated volatility");
-  if (marketRegime === "Risk-On") notes.push("Macro backdrop supports upside");
-  if (swingStrategy === "Buy Puts") notes.push("Downside expression preferred");
-  if (threeMonth >= 75 && oneYear >= 75) notes.push("Trend aligns across horizons");
+  const why = buildWhy(item, pillars, technicals, riskLabel);
+  const marketRegime = getMarketRegime(pillars);
+
+  const notes: string[] = [...why];
+  if (hotSetup) notes.push("Multi-horizon alignment");
+  if (riskLabel === "Extreme") notes.push("Extreme risk profile");
   if (num(item.price) <= 0) notes.push("Missing live quote, refresh all");
 
   return {
     whaleV2,
+    technical: pillars.technical,
+    fundamental: pillars.fundamental,
+    intelligence: pillars.intelligence,
+    environment: pillars.environment,
     riskScore,
     riskLabel,
     swing,
     threeMonth,
     sixMonth,
     oneYear,
+    confidence,
+    why,
     swingSignal,
     threeMonthSignal,
     sixMonthSignal,
@@ -399,7 +517,7 @@ export function computeMetrics(item: Item): RowMetrics {
     threeMonthStrategy,
     sixMonthStrategy,
     oneYearStrategy,
-    bestStrategy: bestHorizon?.strategy ?? "Watch",
+    bestStrategy,
     marketRegime,
     opportunityScore,
     entryZone: tradePlan.entryZone,
@@ -410,7 +528,7 @@ export function computeMetrics(item: Item): RowMetrics {
     callPlan: tradePlan.callPlan,
     putPlan: tradePlan.putPlan,
     notes,
-    momentumToday,
+    momentumToday: Math.round(clamp((pillars.technical * 0.6 + pillars.intelligence * 0.4) * 10)),
     redFlag,
     hotSetup,
   };

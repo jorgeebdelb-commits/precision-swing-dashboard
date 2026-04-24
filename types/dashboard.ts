@@ -35,10 +35,10 @@ export type SentimentResponse = {
 
 export type Strategy =
   | "Buy Calls"
-  | "Buy Puts"
   | "Buy Shares"
   | "Buy Shares + Calls"
-  | "Watch";
+  | "Watch / Starter"
+  | "Watch / Avoid";
 
 export type HorizonKey =
   | "swing"
@@ -49,14 +49,17 @@ export type HorizonKey =
 export type SortKey =
   | "symbol"
   | "price"
-  | "whaleV2"
+  | "technical"
+  | "fundamental"
+  | "intelligence"
+  | "environment"
   | "swing"
   | "threeMonth"
   | "sixMonth"
   | "oneYear"
   | "riskScore"
-  | "opportunityScore"
-  | "percentChange";
+  | "confidence"
+  | "bestStrategy";
 
 export type MarketRegime =
   | "Risk-On"
