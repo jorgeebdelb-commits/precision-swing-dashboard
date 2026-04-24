@@ -8,6 +8,8 @@ import type {
 import { clamp, formatPrice, num } from "../app/lib/helpers";
 
 export type RiskLabel = "Low" | "Medium" | "High" | "Extreme";
+type RiskBucket = RiskLabel | `${RiskLabel}/${RiskLabel}`;
+type TickerClass = "MegaCapTech" | "LargeGrowth" | "Speculative";
 
 type PillarScores = {
   technical: number;
@@ -96,6 +98,25 @@ export type RowMetrics = {
 
 const HIGH_BETA_SYMBOLS = new Set(["TSLA", "MARA", "RIVN", "IREN", "RGTI", "COIN"]);
 const STRONG_NAMES = new Set(["AMD", "NVDA", "AMZN"]);
+const TICKER_CLASSES: Record<string, TickerClass> = {
+  AMZN: "MegaCapTech",
+  NVDA: "MegaCapTech",
+  AMD: "MegaCapTech",
+  TSLA: "LargeGrowth",
+  MARA: "Speculative",
+  RGTI: "Speculative",
+  QBTS: "Speculative",
+};
+
+const TICKER_RISK_BUCKETS: Record<string, RiskBucket> = {
+  AMZN: "Low/Medium",
+  NVDA: "Medium",
+  AMD: "Medium",
+  TSLA: "High",
+  MARA: "High/Extreme",
+  RGTI: "Extreme",
+  QBTS: "Extreme",
+};
 
 const SYMBOL_PROFILES: Record<string, TickerProfile> = {
   NVDA: { sector: "Semiconductors", speculative: false, qualityTilt: 0.9, momentumTilt: 0.8 },
@@ -163,6 +184,76 @@ function getTickerProfile(symbol: string): TickerProfile {
       momentumTilt: 0.5 + symbolJitter(upper.split("").reverse().join(""), 0.15),
     }
   );
+}
+
+function getTickerClass(symbol: string): TickerClass {
+  return TICKER_CLASSES[symbol.toUpperCase()] ?? "LargeGrowth";
+}
+
+function normalizeVolatilityInputs(
+  symbol: string,
+  sector: Sector,
+  atrPercent: number,
+  volatilityPercent: number
+): { normalizedAtr: number; normalizedVolatility: number } {
+  const ticker = symbol.toUpperCase();
+  const tickerClass = getTickerClass(ticker);
+
+  const classAtrBaseline = tickerClass === "MegaCapTech" ? 4.8 : tickerClass === "Speculative" ? 12.8 : 8.4;
+  const classVolBaseline = tickerClass === "MegaCapTech" ? 6.2 : tickerClass === "Speculative" ? 16.5 : 11.4;
+
+  const sectorScale =
+    sector === "Megacap Tech" || sector === "Semiconductors"
+      ? 0.86
+      : sector === "Crypto Mining" || sector === "EV"
+      ? 1.14
+      : 1;
+
+  // Proxy for ticker-specific volatility history until dedicated history table is wired.
+  const tickerHistoryScale =
+    ticker === "AMZN"
+      ? 0.92
+      : ticker === "NVDA"
+      ? 1.05
+      : ticker === "AMD"
+      ? 1.08
+      : ticker === "TSLA"
+      ? 1.18
+      : ticker === "MARA"
+      ? 1.26
+      : ticker === "RGTI" || ticker === "QBTS"
+      ? 1.32
+      : 1;
+
+  const baselineAtr = Math.max(2.5, classAtrBaseline * sectorScale * tickerHistoryScale);
+  const baselineVol = Math.max(3.5, classVolBaseline * sectorScale * tickerHistoryScale);
+
+  return {
+    normalizedAtr: (Math.max(atrPercent, 0) / baselineAtr) * 10,
+    normalizedVolatility: (Math.max(volatilityPercent, 0) / baselineVol) * 10,
+  };
+}
+
+function applyTickerRiskBucket(symbol: string, risk10: number): RiskLabel {
+  const bucket = TICKER_RISK_BUCKETS[symbol.toUpperCase()];
+
+  if (!bucket) {
+    return risk10 >= 8.8 ? "Extreme" : risk10 >= 7.1 ? "High" : risk10 >= 4.8 ? "Medium" : "Low";
+  }
+
+  if (bucket === "Low/Medium") {
+    return risk10 >= 6.2 ? "Medium" : "Low";
+  }
+  if (bucket === "Medium") {
+    return "Medium";
+  }
+  if (bucket === "High") {
+    return "High";
+  }
+  if (bucket === "High/Extreme") {
+    return risk10 >= 8.7 ? "Extreme" : "High";
+  }
+  return "Extreme";
 }
 
 function buildTechnicalFactors(item: Item): TechnicalFactors {
@@ -328,6 +419,7 @@ export function computeRisk(
   technicals: TechnicalFactors
 ): { riskScore: number; riskLabel: RiskLabel } {
   const profile = getTickerProfile(item.symbol);
+  const tickerClass = getTickerClass(item.symbol);
   const baseBeta = HIGH_BETA_SYMBOLS.has(item.symbol.toUpperCase()) ? 2.1 : 1.1;
 
   const betaProxy = num(
@@ -337,30 +429,30 @@ export function computeRisk(
 
   const volatilityPercent = Math.max(technicals.volatilityPercent, 0);
   const atrPercent = Math.max(technicals.atrPercent, 0);
+  const { normalizedAtr, normalizedVolatility } = normalizeVolatilityInputs(
+    item.symbol,
+    profile.sector,
+    atrPercent,
+    volatilityPercent
+  );
   const gapFrequency = clamp10(
-    volatilityPercent * 0.18 +
+    normalizedVolatility * 0.22 +
       Math.max(0, num(item.volumeRatio, 1) - 1) * 2.2 +
       (item.bias === "Bearish" ? 0.85 : 0.22) +
       (profile.speculative ? 0.45 : 0)
   );
 
   const risk10 = clamp10(
-    atrPercent * 0.26 +
-      volatilityPercent * 0.24 +
+    normalizedAtr * 0.23 +
+      normalizedVolatility * 0.25 +
       gapFrequency * 1.95 +
       betaProxy * 1.7 +
-      (profile.speculative ? 0.5 : 0)
+      (profile.speculative ? 0.5 : 0) +
+      (tickerClass === "MegaCapTech" ? -0.38 : tickerClass === "Speculative" ? 0.42 : 0)
   );
 
   const riskScore = Math.round(risk10 * 10);
-  const riskLabel: RiskLabel =
-    risk10 >= 8.8
-      ? "Extreme"
-      : risk10 >= 7.1
-      ? "High"
-      : risk10 >= 4.8
-      ? "Medium"
-      : "Low";
+  const riskLabel = applyTickerRiskBucket(item.symbol, risk10);
 
   return { riskScore, riskLabel };
 }
@@ -623,12 +715,20 @@ function diversifyBestStrategy(
   const mediumOrLowerRisk = riskLabel === "Low" || riskLabel === "Medium";
 
   if (topRanked && STRONG_NAMES.has(symbol.toUpperCase())) {
-    if (strongTrend && mediumOrLowerRisk) return "Buy Shares + Calls";
     return "Buy Shares";
   }
 
-  if (riskLabel === "High" || riskLabel === "Extreme") {
+  if (riskLabel === "High") {
+    return leader.score >= 7.35 ? "Watch / Starter" : "Watch / Avoid";
+  }
+
+  if (riskLabel === "Extreme") {
+    if (leader.score <= 6.1) return "Watch / Avoid";
     return leader.score >= 7.4 ? "Watch / Starter" : "Watch / Avoid";
+  }
+
+  if (strongTrend && mediumOrLowerRisk && leader.score >= 8.45) {
+    return "Buy Shares + Calls";
   }
 
   if (profile.speculative) {
