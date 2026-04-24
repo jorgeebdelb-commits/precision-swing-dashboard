@@ -105,7 +105,7 @@ export async function GET(request: Request) {
 
     let total = 0;
 
-    const scored = items.map((item: any) => {
+    const scored = items.map((item: { headline?: string; source?: string; datetime?: number }) => {
       const headline = item.headline || "";
       const source = item.source || "";
       const datetime = item.datetime || 0;
@@ -143,7 +143,7 @@ export async function GET(request: Request) {
       newsCount: items.length,
       topHeadlines: scored.slice(0, 5),
     });
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { error: "Sentiment route failed" },
       { status: 500 }
