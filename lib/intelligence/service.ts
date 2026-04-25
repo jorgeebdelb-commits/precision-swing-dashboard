@@ -1,16 +1,23 @@
-import { scoreSymbolIntelligence } from "@/lib/scoring";
+import { routeAnalysis } from "@/lib/intelligence/router";
+import { getBestSignals, getModulePerformance, logSignalRun } from "@/lib/intelligence/performance";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import type {
+  AnalysisHorizon,
   IntelligenceApiResponse,
-  IntelligenceFactors,
-  IntelligenceScoreResult,
-} from "@/types/intelligence";
+  IntelligenceSymbolSummary,
+  MarketContextSnapshot,
+} from "@/lib/intelligence/types";
 
 interface WatchlistRow {
   symbol: string;
   technicalScore: number | null;
   macroScore: number | null;
   politicalScore: number | null;
+  rsi: number | null;
+  volumeRatio: number | null;
+  priceVolatility: number | null;
+  earningsDays: number | null;
+  price: number | null;
 }
 
 interface FlowEventRow {
@@ -25,158 +32,134 @@ interface NewsEventRow {
 
 interface CacheRow {
   symbol: string;
-  payload: IntelligenceScoreResult;
+  payload: IntelligenceApiResponse;
   generated_at: string;
 }
 
-function toBase10Score(value: number | null | undefined, fallback: number): number {
-  if (value == null || Number.isNaN(value)) {
-    return fallback;
-  }
-
-  const from100 = value > 10 ? value / 10 : value;
-  return Math.min(10, Math.max(1, Number(from100.toFixed(2))));
+function n(value: number | null | undefined, fallback: number): number {
+  if (value == null || Number.isNaN(value)) return fallback;
+  return Number(value);
 }
 
-function average(values: number[]): number {
-  if (!values.length) {
-    return 5.5;
-  }
-
+function avg(values: number[]): number {
+  if (!values.length) return 5.8;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-async function getCachedScores(symbols: string[]): Promise<IntelligenceScoreResult[]> {
+function toScore10(value: number): number {
+  if (value > 10) {
+    return Math.max(1, Math.min(10, Number((value / 10).toFixed(2))));
+  }
+  return Math.max(1, Math.min(10, Number(value.toFixed(2))));
+}
+
+function resolveBestHorizon(analyses: IntelligenceSymbolSummary["analyses"]): AnalysisHorizon {
+  const top = [...analyses].sort((a, b) => b.score - a.score)[0];
+  return top?.horizon ?? "Short-Term";
+}
+
+async function getCachedDashboard(cacheKey: string): Promise<IntelligenceApiResponse | null> {
   const supabase = getSupabaseServerClient();
-  const oneHourAgoIso = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
   const { data, error } = await supabase
     .from("intelligence_cache")
     .select("symbol, payload, generated_at")
-    .in("symbol", symbols)
-    .gte("generated_at", oneHourAgoIso);
+    .eq("symbol", cacheKey)
+    .gte("generated_at", oneHourAgo)
+    .maybeSingle();
 
   if (error || !data) {
-    return [];
+    return null;
   }
 
-  return (data as CacheRow[]).map((row) => ({
+  const row = data as CacheRow;
+  return {
     ...row.payload,
     generatedAt: row.generated_at,
-  }));
+    source: "cache",
+  };
 }
 
-async function buildFactors(symbols: string[]): Promise<IntelligenceFactors[]> {
+async function persistDashboard(cacheKey: string, payload: IntelligenceApiResponse): Promise<void> {
+  const supabase = getSupabaseServerClient();
+  const generatedAt = payload.generatedAt;
+
+  await supabase.from("intelligence_cache").upsert(
+    {
+      symbol: cacheKey,
+      payload,
+      generated_at: generatedAt,
+      updated_at: generatedAt,
+    },
+    { onConflict: "symbol" }
+  );
+}
+
+async function buildMarketContext(symbols: string[]): Promise<Record<string, MarketContextSnapshot>> {
   const supabase = getSupabaseServerClient();
 
   const [watchlistRes, flowRes, newsRes] = await Promise.all([
     supabase
       .from("watchlist")
-      .select("symbol, technicalScore, macroScore, politicalScore")
+      .select(
+        "symbol, technicalScore, macroScore, politicalScore, rsi, volumeRatio, priceVolatility, earningsDays, price"
+      )
       .in("symbol", symbols),
     supabase.from("flow_events").select("symbol, score").in("symbol", symbols),
-    supabase
-      .from("news_events")
-      .select("symbol, sentiment_score")
-      .in("symbol", symbols),
+    supabase.from("news_events").select("symbol, sentiment_score").in("symbol", symbols),
   ]);
 
-  const watchRows = ((watchlistRes.data ?? []) as WatchlistRow[]).reduce<
-    Record<string, WatchlistRow>
-  >((acc, row) => {
-    acc[row.symbol] = row;
-    return acc;
-  }, {});
-
+  const watchRows = (watchlistRes.data ?? []) as WatchlistRow[];
   const flowRows = (flowRes.data ?? []) as FlowEventRow[];
+  const newsRows = (newsRes.data ?? []) as NewsEventRow[];
+
   const flowMap = flowRows.reduce<Record<string, number[]>>((acc, row) => {
     if (!acc[row.symbol]) {
       acc[row.symbol] = [];
     }
-
     if (row.score != null) {
       acc[row.symbol].push(Number(row.score));
     }
-
     return acc;
   }, {});
 
-  const newsRows = (newsRes.data ?? []) as NewsEventRow[];
   const newsMap = newsRows.reduce<Record<string, number[]>>((acc, row) => {
     if (!acc[row.symbol]) {
       acc[row.symbol] = [];
     }
-
     if (row.sentiment_score != null) {
       acc[row.symbol].push(Number(row.sentiment_score));
     }
-
     return acc;
   }, {});
 
-  return symbols.map((symbol) => {
-    const watch = watchRows[symbol];
+  return watchRows.reduce<Record<string, MarketContextSnapshot>>((acc, row) => {
+    const technical = toScore10(n(row.technicalScore, 62));
+    const macro = toScore10(n(row.macroScore, 61));
+    const political = toScore10(n(row.politicalScore, 59));
+    const rsi = n(row.rsi, 50);
+    const volumeRatio = n(row.volumeRatio, 1);
+    const volatility = n(row.priceVolatility, 1.8);
+    const flowScore = toScore10(avg(flowMap[row.symbol] ?? []));
+    const newsSentiment = toScore10(avg(newsMap[row.symbol] ?? []));
 
-    return {
-      symbol,
-      technical: toBase10Score(watch?.technicalScore, 6),
-      fundamentals: toBase10Score(watch?.macroScore, 6.1),
-      flow: toBase10Score(average(flowMap[symbol] ?? []), 5.8),
-      news: toBase10Score(average(newsMap[symbol] ?? []), 5.7),
-      macro: toBase10Score(watch?.macroScore, 6),
-      crowd: toBase10Score(watch?.politicalScore, 5.9),
+    acc[row.symbol] = {
+      price: n(row.price, 0),
+      rsi,
+      volumeRatio,
+      technicalScore: technical,
+      macroScore: macro,
+      politicalScore: political,
+      earningsDays: row.earningsDays == null ? null : Number(row.earningsDays),
+      newsSentiment,
+      flowScore,
+      volatility,
+      trendSlope: Number(((technical - 5) / 30).toFixed(4)),
     };
-  });
-}
 
-async function persistScores(scores: IntelligenceScoreResult[]): Promise<void> {
-  if (!scores.length) {
-    return;
-  }
-
-  const supabase = getSupabaseServerClient();
-
-  await supabase.from("intelligence_scores").upsert(
-    scores.map((score) => ({
-      symbol: score.symbol,
-      generated_at: score.generatedAt,
-      overall_score: score.overallScore,
-      technical_score: score.baseScores.technical,
-      fundamentals_score: score.baseScores.fundamentals,
-      flow_score: score.baseScores.flow,
-      news_score: score.baseScores.news,
-      macro_score: score.baseScores.macro,
-      crowd_score: score.baseScores.crowd,
-      swing_score: score.horizonScores.swing,
-      three_month_score: score.horizonScores.threeMonth,
-      six_month_score: score.horizonScores.sixMonth,
-      one_year_score: score.horizonScores.oneYear,
-      label: score.label,
-      best_strategy: score.bestStrategy,
-      confidence_pct: score.confidencePct,
-      risk_level: score.riskLevel,
-      updated_at: score.generatedAt,
-    })),
-    { onConflict: "symbol" }
-  );
-
-  await supabase.from("intelligence_cache").upsert(
-    scores.map((score) => ({
-      symbol: score.symbol,
-      payload: score,
-      generated_at: score.generatedAt,
-      updated_at: score.generatedAt,
-    })),
-    { onConflict: "symbol" }
-  );
-
-  await supabase.from("scoring_runs").insert({
-    symbols: scores.map((score) => score.symbol),
-    result_count: scores.length,
-    run_type: "refresh",
-    status: "success",
-    completed_at: new Date().toISOString(),
-  });
+    return acc;
+  }, {});
 }
 
 export async function getWatchlistSymbols(): Promise<string[]> {
@@ -186,42 +169,82 @@ export async function getWatchlistSymbols(): Promise<string[]> {
     .select("symbol")
     .order("created_at", { ascending: true });
 
-  return (data ?? []).map((row: { symbol: string }) => row.symbol);
+  return (data ?? []).map((row: { symbol: string }) => row.symbol).filter(Boolean);
 }
 
 export async function getIntelligence(
   symbols: string[],
-  forceRefresh = false
+  forceRefresh = false,
+  horizon?: string
 ): Promise<IntelligenceApiResponse> {
   if (!symbols.length) {
     return {
       items: [],
+      performance: [],
+      bestSignals: [],
       generatedAt: new Date().toISOString(),
       source: "fresh",
     };
   }
 
-  if (!forceRefresh) {
-    const cachedItems = await getCachedScores(symbols);
+  const cacheKey = `${symbols.sort().join(",")}::${(horizon ?? "all").toLowerCase()}`;
 
-    if (cachedItems.length === symbols.length) {
-      return {
-        items: cachedItems,
-        generatedAt: new Date().toISOString(),
-        source: "cache",
-      };
+  if (!forceRefresh) {
+    const cached = await getCachedDashboard(cacheKey);
+    if (cached) {
+      return cached;
     }
   }
 
-  const generatedAt = new Date().toISOString();
-  const factors = await buildFactors(symbols);
-  const scored = factors.map((factor) => scoreSymbolIntelligence(factor, generatedAt));
+  const marketContext = await buildMarketContext(symbols);
+  const nowIso = new Date().toISOString();
 
-  await persistScores(scored);
+  const items = await Promise.all(
+    symbols.map(async (symbol) => {
+      const context = marketContext[symbol];
+      if (!context) {
+        return null;
+      }
 
-  return {
-    items: scored,
-    generatedAt,
+      const runs = await routeAnalysis(symbol, horizon, {
+        context: { symbol, market: context },
+        nowIso,
+      });
+
+      for (const run of runs) {
+        await logSignalRun({
+          symbol,
+          horizon: run.result.horizon,
+          moduleName: run.moduleName,
+          recommendation: run.result.recommendation,
+          score: run.result.score,
+          triggeredSignals: run.result.triggeredSignals,
+          marketContext: context,
+        });
+      }
+
+      const analyses = runs.map((run) => run.result);
+      return {
+        symbol,
+        analyses,
+        bestHorizon: resolveBestHorizon(analyses),
+        updatedAt: nowIso,
+      } satisfies IntelligenceSymbolSummary;
+    })
+  );
+
+  const cleanItems = items.filter((item): item is IntelligenceSymbolSummary => item !== null);
+  const [performance, bestSignals] = await Promise.all([getModulePerformance(), getBestSignals()]);
+
+  const payload: IntelligenceApiResponse = {
+    items: cleanItems,
+    performance,
+    bestSignals,
+    generatedAt: nowIso,
     source: "fresh",
   };
+
+  await persistDashboard(cacheKey, payload);
+
+  return payload;
 }

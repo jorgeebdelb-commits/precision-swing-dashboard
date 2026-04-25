@@ -11,8 +11,9 @@ export async function GET(request: Request) {
           .map((symbol) => symbol.trim().toUpperCase())
           .filter(Boolean)
       : await getWatchlistSymbols();
+    const horizon = url.searchParams.get("horizon");
 
-    const result = await getIntelligence(symbols, false);
+    const result = await getIntelligence(symbols, false, horizon ?? undefined);
 
     return NextResponse.json(result);
   } catch (error) {
