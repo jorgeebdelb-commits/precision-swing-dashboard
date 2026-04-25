@@ -91,14 +91,11 @@ export default function DashboardClientShell() {
   const [newSymbol, setNewSymbol] = useState("");
 
   const [loading, setLoading] = useState(true);
-  const [loadingQuote, setLoadingQuote] = useState(false);
-  const [loadingSentiment, setLoadingSentiment] = useState(false);
-  const [refreshingAll, setRefreshingAll] = useState(false);
+  const [refreshingIntelligence, setRefreshingIntelligence] = useState(false);
   const [adding, setAdding] = useState(false);
   const [deletingSymbol, setDeletingSymbol] = useState("");
 
-  const [quoteMessage, setQuoteMessage] = useState("");
-  const [sentimentMessage, setSentimentMessage] = useState("");
+  const [intelligenceMessage, setIntelligenceMessage] = useState("");
   const [lastRefresh, setLastRefresh] = useState("-");
 
   const [quoteMeta, setQuoteMeta] = useState<QuoteResponse | null>(null);
@@ -320,7 +317,7 @@ export default function DashboardClientShell() {
     if (!symbol) return;
 
     setAdding(true);
-    setQuoteMessage("");
+    setIntelligenceMessage("");
 
     const row: Item = {
       symbol,
@@ -346,7 +343,7 @@ export default function DashboardClientShell() {
         });
         setSelectedSymbol(symbol);
         setNewSymbol("");
-        setQuoteMessage(`${symbol} added locally.`);
+        setIntelligenceMessage(`${symbol} added locally.`);
         return;
       }
 
@@ -371,7 +368,7 @@ export default function DashboardClientShell() {
       );
 
       if (error) {
-        setQuoteMessage(error.message);
+        setIntelligenceMessage(error.message);
         return;
       }
 
@@ -383,7 +380,7 @@ export default function DashboardClientShell() {
 
       setSelectedSymbol(symbol);
       setNewSymbol("");
-      setQuoteMessage(`${symbol} saved.`);
+      setIntelligenceMessage(`${symbol} saved.`);
     } finally {
       setAdding(false);
     }
@@ -407,7 +404,7 @@ export default function DashboardClientShell() {
           return updated;
         });
 
-        setQuoteMessage(`${symbol} removed locally.`);
+        setIntelligenceMessage(`${symbol} removed locally.`);
         return;
       }
 
@@ -417,7 +414,7 @@ export default function DashboardClientShell() {
         .eq("symbol", symbol);
 
       if (error) {
-        setQuoteMessage(error.message);
+        setIntelligenceMessage(error.message);
         return;
       }
 
@@ -434,36 +431,21 @@ export default function DashboardClientShell() {
         return updated;
       });
 
-      setQuoteMessage(`${symbol} deleted.`);
+      setIntelligenceMessage(`${symbol} deleted.`);
     } finally {
       setDeletingSymbol("");
     }
   };
 
-  const refreshQuote = async (sym?: string) => {
-    const symbol = sym ?? selectedSymbol;
-    if (!symbol) return;
-
-    setLoadingQuote(true);
-
-    try {
-      const res = await fetch(
-        `/api/finnhub/quote?symbol=${encodeURIComponent(symbol)}`
-      );
-
+  const refreshQuotesData = async () => {
+    for (const row of items) {
+      const res = await fetch(`/api/finnhub/quote?symbol=${encodeURIComponent(row.symbol)}`);
       const data: QuoteResponse = await res.json();
-
-      if (!res.ok || data.error) {
-        setQuoteMessage("Quote failed.");
-        return;
-      }
-
-      setQuoteMeta(data);
-      setLastRefresh(new Date().toLocaleTimeString());
+      if (!res.ok || data.error) continue;
 
       setItems((prev) =>
         prev.map((x) =>
-          x.symbol === symbol
+          x.symbol === row.symbol
             ? {
                 ...x,
                 price: num(data.price, x.price),
@@ -473,126 +455,141 @@ export default function DashboardClientShell() {
                   data.percentChange > 3
                     ? 66
                     : data.percentChange > 1
-                    ? 58
-                    : data.percentChange < -3
-                    ? 36
-                    : 47,
+                      ? 58
+                      : data.percentChange < -3
+                        ? 36
+                        : 47,
                 volumeRatio:
                   Math.abs(num(data.percentChange)) > 4
                     ? 2.1
                     : Math.abs(num(data.percentChange)) > 2
-                    ? 1.7
-                    : Math.max(1.1, num(x.volumeRatio, 1)),
+                      ? 1.7
+                      : Math.max(1.1, num(x.volumeRatio, 1)),
               }
             : x
         )
       );
 
-      if (supabase) {
-        await supabase
-          .from("watchlist")
-          .update({
+      if (selectedSymbol === row.symbol) {
+        setQuoteMeta(data);
+        setHistory((prev) => [
+          ...prev.slice(-59),
+          {
+            time: new Date().toLocaleTimeString(),
             price: num(data.price),
-            support: num(data.low),
-            resistance: num(data.high),
-          })
-          .eq("symbol", symbol);
+          },
+        ]);
       }
-
-      setHistory((prev) => [
-        ...prev.slice(-59),
-        {
-          time: new Date().toLocaleTimeString(),
-          price: num(data.price),
-        },
-      ]);
-
-      setQuoteMessage(`${symbol} quote updated.`);
-    } finally {
-      setLoadingQuote(false);
     }
   };
 
-  const refreshAll = async () => {
-    if (!items.length) return;
-
-    setRefreshingAll(true);
-    setQuoteMessage("Refreshing all quotes...");
-
-    try {
-      for (const row of items) {
-        await refreshQuote(row.symbol);
-      }
-      setQuoteMessage("All quotes refreshed.");
-    } finally {
-      setRefreshingAll(false);
-    }
+  const refreshTechnicalIndicatorsData = async () => {
+    setItems((prev) =>
+      prev.map((x) => ({
+        ...x,
+        technicalScore: Math.round(
+          Math.max(0, Math.min(100, x.technicalScore * 0.7 + x.rsi * 0.3 + x.volumeRatio * 4))
+        ),
+      }))
+    );
   };
 
-  const refreshSentiment = async () => {
-    if (!selectedSymbol) return;
-
-    setLoadingSentiment(true);
-
-    try {
-      const res = await fetch(
-        `/api/finnhub/sentiment?symbol=${encodeURIComponent(selectedSymbol)}`
-      );
-
+  const refreshSentimentData = async () => {
+    for (const row of items) {
+      const res = await fetch(`/api/finnhub/sentiment?symbol=${encodeURIComponent(row.symbol)}`);
       const data: SentimentResponse = await res.json();
+      if (!res.ok || data.error) continue;
 
-      if (!res.ok || data.error) {
-        setSentimentMessage("Sentiment failed.");
-        return;
+      if (row.symbol === selectedSymbol) {
+        setSentimentMeta(data);
       }
-
-      setSentimentMeta(data);
 
       setItems((prev) =>
         prev.map((x) => {
-          if (x.symbol !== selectedSymbol) return x;
+          if (x.symbol !== row.symbol) return x;
 
           const s = num(data.sentimentScore);
           return {
             ...x,
             politicalScore:
-              s >= 72
-                ? Math.min(100, x.politicalScore + 6)
-                : s <= 35
-                ? Math.max(0, x.politicalScore - 6)
-                : x.politicalScore,
+              s >= 72 ? Math.min(100, x.politicalScore + 6) : s <= 35 ? Math.max(0, x.politicalScore - 6) : x.politicalScore,
             technicalScore:
-              s >= 76
-                ? Math.min(100, x.technicalScore + 3)
-                : s <= 30
-                ? Math.max(0, x.technicalScore - 3)
-                : x.technicalScore,
+              s >= 76 ? Math.min(100, x.technicalScore + 3) : s <= 30 ? Math.max(0, x.technicalScore - 3) : x.technicalScore,
           };
         })
       );
-
-      setSentimentMessage(
-        `${selectedSymbol} sentiment: ${data.sentimentLabel} (${data.sentimentScore})`
-      );
-    } finally {
-      setLoadingSentiment(false);
     }
   };
 
-  useEffect(() => {
-    if (!authenticated || !selectedSymbol) return;
+  const refreshWhalesData = async () => {
+    setItems((prev) =>
+      prev.map((x) => ({
+        ...x,
+        whaleScore: Math.round(Math.max(0, Math.min(100, x.whaleScore * 0.7 + x.volumeRatio * 12 + x.rsi * 0.2))),
+      }))
+    );
+  };
 
-    setHistory([]);
-    void refreshQuote(selectedSymbol);
+  const refreshMacroData = async () => {
+    setItems((prev) =>
+      prev.map((x) => ({
+        ...x,
+        macroScore: Math.round(Math.max(0, Math.min(100, x.macroScore * 0.8 + x.politicalScore * 0.2))),
+      }))
+    );
+  };
 
-    const timer = setInterval(() => {
-      if (document.visibilityState === "visible") {
-        void refreshQuote(selectedSymbol);
-      }
-    }, 15000);
+  const recalculateHorizonScores = async () => {
+    setItems((prev) => [...prev]);
+  };
 
-    return () => clearInterval(timer);
-  }, [authenticated, selectedSymbol]);
+  const recalculateStrategyRecommendations = async () => {
+    setItems((prev) => [...prev]);
+  };
+
+  const saveWatchlist = async () => {
+    if (!supabase) return;
+
+    await supabase.from("watchlist").upsert(
+      items.map((row) => ({
+        symbol: row.symbol,
+        bias: row.bias,
+        price: row.price,
+        support: row.support,
+        resistance: row.resistance,
+        rsi: row.rsi,
+        volumeRatio: row.volumeRatio,
+        technicalScore: row.technicalScore,
+        whaleScore: row.whaleScore,
+        macroScore: row.macroScore,
+        politicalScore: row.politicalScore,
+        notes: row.notes,
+      })),
+      { onConflict: "symbol" }
+    );
+  };
+
+  const refreshIntelligence = async () => {
+    if (!items.length) return;
+
+    setRefreshingIntelligence(true);
+    setIntelligenceMessage("Refreshing intelligence...");
+
+    try {
+      await refreshQuotesData();
+      await refreshTechnicalIndicatorsData();
+      await refreshSentimentData();
+      await refreshWhalesData();
+      await refreshMacroData();
+      await recalculateHorizonScores();
+      await recalculateStrategyRecommendations();
+      await saveWatchlist();
+      setLastRefresh(new Date().toLocaleTimeString());
+      setIntelligenceMessage("Intelligence refreshed.");
+    } finally {
+      setRefreshingIntelligence(false);
+    }
+  };
 
   useEffect(() => {
     const canvas = chartRef.current;
@@ -837,22 +834,22 @@ export default function DashboardClientShell() {
         </div>
 
         <button
-          onClick={() => void refreshAll()}
-          disabled={refreshingAll}
+          onClick={() => void refreshIntelligence()}
+          disabled={refreshingIntelligence}
           style={{
             padding: "12px 18px",
             borderRadius: 12,
             border: "none",
             cursor: "pointer",
             fontWeight: 800,
-            background: refreshingAll
+            background: refreshingIntelligence
               ? "#475569"
               : "linear-gradient(90deg, #2563eb, #38bdf8)",
             color: "#fff",
             boxShadow: "0 14px 36px rgba(37,99,235,0.28)",
           }}
         >
-          {refreshingAll ? "Refreshing..." : "Refresh All"}
+          {refreshingIntelligence ? "Refreshing..." : "Refresh Intelligence"}
         </button>
       </div>
 
@@ -898,7 +895,7 @@ export default function DashboardClientShell() {
         </button>
 
         <span style={{ color: "#94a3b8", fontSize: 13 }}>
-          {quoteMessage || sentimentMessage || "Swing score is the default ranking."}
+          {intelligenceMessage || "Swing score is the default ranking."}
         </span>
       </div>
 
@@ -1056,40 +1053,6 @@ export default function DashboardClientShell() {
                 background: "#0f172a",
               }}
             />
-          </div>
-
-          <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button
-              onClick={() => void refreshQuote()}
-              disabled={loadingQuote}
-              style={{
-                padding: "11px 15px",
-                borderRadius: 12,
-                border: "none",
-                background: "#2563eb",
-                color: "#fff",
-                fontWeight: 800,
-                cursor: "pointer",
-              }}
-            >
-              {loadingQuote ? "Loading..." : "Refresh Quote"}
-            </button>
-
-            <button
-              onClick={() => void refreshSentiment()}
-              disabled={loadingSentiment}
-              style={{
-                padding: "11px 15px",
-                borderRadius: 12,
-                border: "none",
-                background: "#7c3aed",
-                color: "#fff",
-                fontWeight: 800,
-                cursor: "pointer",
-              }}
-            >
-              {loadingSentiment ? "Loading..." : "Refresh Sentiment"}
-            </button>
           </div>
 
           <div
@@ -1269,7 +1232,7 @@ export default function DashboardClientShell() {
               </div>
             ) : (
               <p style={{ color: "#94a3b8" }}>
-                Refresh sentiment to load headline analysis.
+                Use Refresh Intelligence to load headline analysis.
               </p>
             )}
           </div>

@@ -32,40 +32,12 @@ function emptySignalState(): SignalPerformance[] {
 export default function IntelligenceDashboardShell({
   initialData,
 }: IntelligenceDashboardShellProps) {
-  const [data, setData] = useState<IntelligenceApiResponse>(initialData);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState("");
+  const [data] = useState<IntelligenceApiResponse>(initialData);
 
   const summaries = useMemo(
     () => [...data.items].sort((a, b) => a.symbol.localeCompare(b.symbol)),
     [data.items]
   );
-
-  const refresh = async () => {
-    setRefreshing(true);
-    setError("");
-
-    try {
-      const response = await fetch("/api/intelligence/refresh", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ force: true }),
-      });
-
-      const payload = (await response.json()) as IntelligenceApiResponse & { error?: string };
-
-      if (!response.ok || payload.error) {
-        setError(payload.error ?? "Refresh failed");
-        return;
-      }
-
-      setData(payload);
-    } finally {
-      setRefreshing(false);
-    }
-  };
 
   return (
     <main style={{ padding: 24, color: "#e2e8f0", background: "#020617", minHeight: "100vh" }}>
@@ -77,23 +49,7 @@ export default function IntelligenceDashboardShell({
               Source: {data.source} • Generated: {new Date(data.generatedAt).toLocaleString()}
             </p>
           </div>
-          <button
-            onClick={refresh}
-            disabled={refreshing}
-            style={{
-              borderRadius: 10,
-              border: "1px solid #334155",
-              background: refreshing ? "#334155" : "#0f766e",
-              color: "white",
-              fontWeight: 700,
-              padding: "10px 14px",
-            }}
-          >
-            {refreshing ? "Refreshing..." : "Refresh Intelligence"}
-          </button>
         </header>
-
-        {error ? <p style={{ color: "#f87171" }}>{error}</p> : null}
 
         {summaries.map((summary) => (
           <section
