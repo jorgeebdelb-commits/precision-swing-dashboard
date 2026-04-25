@@ -151,7 +151,10 @@ const SECTOR_ADJUSTMENTS: Record<Sector, { fundamental: number; technical: numbe
 const clamp10 = (value: number): number =>
   Math.max(1, Math.min(10, Math.round(value * 10) / 10));
 
-const scaleTo10 = (value: number): number => clamp10(clamp(value) / 10);
+const scaleTo10 = (value: number): number => {
+  if (!Number.isFinite(value)) return 1;
+  return value > 10 ? clamp10(clamp(value) / 10) : clamp10(value);
+};
 
 const confidenceToScore = (confidence: ConfidenceLevel): number => {
   if (confidence === "High") return 8.6;
