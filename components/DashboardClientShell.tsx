@@ -195,8 +195,13 @@ export default function DashboardClientShell() {
   const [history, setHistory] = useState<{ time: string; price: number }[]>([]);
   const [sortKey, setSortKey] = useState<SortKey>("swing");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const latestItemsRef = useRef<Item[]>([]);
 
   const chartRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    latestItemsRef.current = items;
+  }, [items]);
 
   useEffect(() => {
     const unlocked = localStorage.getItem("precision-dashboard-auth");
@@ -576,15 +581,15 @@ export default function DashboardClientShell() {
     setItems((prev) => [...prev]);
   };
 
-  const saveWatchlist = async () => {
+  const saveWatchlist = async (rows: Item[] = latestItemsRef.current) => {
     if (!supabase) {
-      localStorage.setItem(WATCHLIST_CACHE_KEY, JSON.stringify(items));
+      localStorage.setItem(WATCHLIST_CACHE_KEY, JSON.stringify(rows));
       setIntelligenceMessage("Saved to local fallback cache.");
       return true;
     }
 
     const { error } = await supabase.from("watchlist").upsert(
-      items.map((row) => ({
+      rows.map((row) => ({
         ...toWatchlistRow(row),
       })),
       { onConflict: "symbol" }
@@ -595,7 +600,7 @@ export default function DashboardClientShell() {
       return false;
     }
 
-    localStorage.setItem(WATCHLIST_CACHE_KEY, JSON.stringify(items));
+    localStorage.setItem(WATCHLIST_CACHE_KEY, JSON.stringify(rows));
     setIntelligenceMessage("Watchlist saved.");
     return true;
   };
@@ -622,11 +627,10 @@ export default function DashboardClientShell() {
       if (intelligenceRes.ok) {
         const intelligenceData = (await intelligenceRes.json()) as IntelligenceApiResponse;
         const symbolMap = new Map(intelligenceData.items.map((entry) => [entry.symbol, entry]));
-
-        const debugRows: Array<{ symbol: string; swing: number; threeMonth: number; sixMonth: number; oneYear: number }> = [];
+        let nextItems: Item[] = [];
 
         setItems((prev) =>
-          prev.map((row, index) => {
+          (nextItems = prev.map((row) => {
             const summary = symbolMap.get(row.symbol);
             if (!summary) return row;
 
@@ -636,39 +640,10 @@ export default function DashboardClientShell() {
               updates[key] = Number(analysis.score.toFixed(2));
             }
 
-            const merged = { ...row, ...updates, bias: strategyToBias(summary.analyses[0]?.strategy ?? "Watch") };
-            if (index < 3) {
-              debugRows.push({
-                symbol: merged.symbol,
-                swing: num(merged.swingScore),
-                threeMonth: num(merged.threeMonthScore),
-                sixMonth: num(merged.sixMonthScore),
-                oneYear: num(merged.oneYearScore),
-              });
-            }
-            return merged;
-          })
+            return { ...row, ...updates, bias: strategyToBias(summary.analyses[0]?.strategy ?? "Watch") };
+          }))
         );
-
-        if (debugRows.length) {
-          console.debug("[refresh][horizon-scores:first-3]", debugRows);
-          const amd = debugRows.find((row) => row.symbol === "AMD");
-          const nvda = debugRows.find((row) => row.symbol === "NVDA");
-          const tsla = debugRows.find((row) => row.symbol === "TSLA");
-          if (amd && nvda && tsla) {
-            console.debug("[refresh][verification:AMD_NVDA_TSLA]", {
-              amd,
-              nvda,
-              tsla,
-              distinct:
-                new Set([
-                  `${amd.swing}|${amd.threeMonth}|${amd.sixMonth}|${amd.oneYear}`,
-                  `${nvda.swing}|${nvda.threeMonth}|${nvda.sixMonth}|${nvda.oneYear}`,
-                  `${tsla.swing}|${tsla.threeMonth}|${tsla.sixMonth}|${tsla.oneYear}`,
-                ]).size === 3,
-            });
-          }
-        }
+        latestItemsRef.current = nextItems;
       }
 
       await recalculateHorizonScores();
