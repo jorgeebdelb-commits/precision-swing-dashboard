@@ -4,6 +4,10 @@ export type WatchlistItem = {
   symbol: string;
   bias: Bias;
   price: number;
+  swingScore?: number;
+  threeMonthScore?: number;
+  sixMonthScore?: number;
+  oneYearScore?: number;
   support: number;
   resistance: number;
   rsi: number;
