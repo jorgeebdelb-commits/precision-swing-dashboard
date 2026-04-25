@@ -1,3 +1,12 @@
+import type {
+  AnalysisResult,
+  IntelligenceApiResponse,
+  IntelligenceSymbolSummary,
+  ModulePerformance,
+  RefreshIntelligenceRequest,
+  SignalPerformance,
+} from "@/lib/intelligence/types";
+
 export type RiskLevel = "LOW" | "MEDIUM" | "HIGH";
 
 export type IntelligenceLabel =
@@ -41,7 +50,7 @@ export interface IntelligenceFactors {
   crowd: number;
 }
 
-export interface IntelligenceScoreResult {
+export interface LegacyIntelligenceScoreResult {
   symbol: string;
   baseScores: BaseScores;
   horizonScores: HorizonScores;
@@ -53,13 +62,13 @@ export interface IntelligenceScoreResult {
   generatedAt: string;
 }
 
-export interface IntelligenceApiResponse {
-  items: IntelligenceScoreResult[];
-  generatedAt: string;
-  source: "cache" | "fresh";
-}
+export type HorizonAnalysisResult = AnalysisResult;
+export type IntelligenceScoreResult = LegacyIntelligenceScoreResult;
 
-export interface RefreshIntelligenceRequest {
-  symbols?: string[];
-  force?: boolean;
-}
+export type {
+  IntelligenceApiResponse,
+  IntelligenceSymbolSummary,
+  ModulePerformance,
+  SignalPerformance,
+  RefreshIntelligenceRequest,
+};

@@ -10,7 +10,7 @@ export async function POST(request: Request) {
       ? body.symbols.map((symbol) => symbol.trim().toUpperCase()).filter(Boolean)
       : await getWatchlistSymbols();
 
-    const result = await getIntelligence(symbols, body.force ?? true);
+    const result = await getIntelligence(symbols, body.force ?? true, body.horizon);
 
     return NextResponse.json(result);
   } catch (error) {
