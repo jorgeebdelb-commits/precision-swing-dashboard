@@ -1,9 +1,9 @@
 import type { FactorWeight, IntelligenceSignal } from "@/lib/intelligence/types";
 import { getAdaptiveWeights, getDefaultWeights, saveAdaptiveWeights } from "@/lib/intelligence/weights";
 
-const MAX_ADJUSTMENT_PER_EVAL = 0.05;
-const MIN_WEIGHT = 0.05;
-const MAX_WEIGHT = 0.45;
+const MAX_ADJUSTMENT_PER_EVAL = 0.08;
+const MIN_WEIGHT = 0.03;
+const MAX_WEIGHT = 0.55;
 
 function toWeightMap(weights: FactorWeight[]): Record<string, number> {
   return weights.reduce<Record<string, number>>((acc, item) => {

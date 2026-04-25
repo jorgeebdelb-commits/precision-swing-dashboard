@@ -10,10 +10,38 @@ export function scoreFromWeights(weights: FactorWeight[], breakdown: Record<stri
 }
 
 function toRisk(volatility: number): RiskLevel {
-  if (volatility >= 3.4) return "Extreme";
-  if (volatility >= 2.4) return "High";
-  if (volatility >= 1.5) return "Medium";
+  if (volatility >= 4.1) return "Extreme";
+  if (volatility >= 3.1) return "High";
+  if (volatility >= 2.0) return "Medium";
   return "Low";
+}
+
+function deriveHorizonScores(params: {
+  horizon: HorizonKey;
+  score: number;
+  marketContext: MarketContextSnapshot;
+}): { swingScore: number; threeMonthScore: number; sixMonthScore: number; oneYearScore: number } {
+  const baseSwing = clamp10(params.marketContext.technicalScore * 0.95 + params.marketContext.trendSlope * 11 + 0.45);
+  const base3m = clamp10(
+    params.marketContext.macroScore * 0.74 + params.marketContext.newsSentiment * 0.18 + params.marketContext.flowScore * 0.08
+  );
+  const base6m = clamp10(params.marketContext.macroScore * 0.88 + params.marketContext.politicalScore * 0.12 - 0.2);
+  const base1y = clamp10(params.marketContext.macroScore * 0.94 + params.marketContext.politicalScore * 0.2 - 0.55);
+
+  const horizonBumps: Record<HorizonKey, { swing: number; m3: number; m6: number; y1: number }> = {
+    swing: { swing: 0.55, m3: -0.05, m6: -0.2, y1: -0.35 },
+    threeMonth: { swing: -0.2, m3: 0.5, m6: 0.18, y1: 0.05 },
+    sixMonth: { swing: -0.3, m3: 0.05, m6: 0.55, y1: 0.22 },
+    oneYear: { swing: -0.45, m3: -0.1, m6: 0.15, y1: 0.6 },
+  };
+
+  const bump = horizonBumps[params.horizon];
+  return {
+    swingScore: params.horizon === "swing" ? params.score : clamp10(baseSwing + bump.swing),
+    threeMonthScore: params.horizon === "threeMonth" ? params.score : clamp10(base3m + bump.m3),
+    sixMonthScore: params.horizon === "sixMonth" ? params.score : clamp10(base6m + bump.m6),
+    oneYearScore: params.horizon === "oneYear" ? params.score : clamp10(base1y + bump.y1),
+  };
 }
 
 export function finalizePipeline(params: {
@@ -25,12 +53,13 @@ export function finalizePipeline(params: {
 }): AnalysisResult {
   const score = scoreFromWeights(params.factorWeights, params.factorBreakdown);
   const risk = toRisk(params.marketContext.volatility);
+  const horizonScores = deriveHorizonScores({ horizon: params.horizon, score, marketContext: params.marketContext });
 
   const engine = evaluateRecommendation({
-    swingScore: params.horizon === "swing" ? score : clamp10(params.marketContext.technicalScore * 0.9 + 0.8),
-    threeMonthScore: params.horizon === "threeMonth" ? score : clamp10(params.marketContext.macroScore * 0.75 + 1.2),
-    sixMonthScore: params.horizon === "sixMonth" ? score : clamp10(params.marketContext.macroScore * 0.8 + 1),
-    oneYearScore: params.horizon === "oneYear" ? score : clamp10(params.marketContext.macroScore * 0.85 + 0.8),
+    swingScore: horizonScores.swingScore,
+    threeMonthScore: horizonScores.threeMonthScore,
+    sixMonthScore: horizonScores.sixMonthScore,
+    oneYearScore: horizonScores.oneYearScore,
     technicalScore: clamp10(params.marketContext.technicalScore),
     fundamentalScore: clamp10((params.marketContext.macroScore + params.marketContext.politicalScore) / 2),
     sentiment:
