@@ -605,20 +605,77 @@ function buildEngineInput(params: {
   };
 }
 
+function deriveDynamicHorizonScores(params: {
+  pillars: PillarScores;
+  momentum: number;
+  sector: Sector;
+  sentiment: "Bullish" | "Neutral" | "Bearish";
+}): { swing: number; threeMonth: number; sixMonth: number; oneYear: number } {
+  const { pillars, momentum, sector, sentiment } = params;
+  const sectorAdj = SECTOR_ADJUSTMENTS[sector];
+  const sectorScore = clamp10(5 + sectorAdj.fundamental * 1.8 + sectorAdj.technical * 1.2 + sectorAdj.environment * 1.4);
+  const sentimentScore = sentiment === "Bullish" ? 8.2 : sentiment === "Bearish" ? 3.8 : 5.8;
+
+  return {
+    swing: clamp10(
+      pillars.technical * 0.3 +
+        pillars.intelligence * 0.24 +
+        momentum * 0.2 +
+        sentimentScore * 0.14 +
+        pillars.environment * 0.07 +
+        sectorScore * 0.05
+    ),
+    threeMonth: clamp10(
+      pillars.technical * 0.2 +
+        pillars.fundamental * 0.24 +
+        pillars.intelligence * 0.16 +
+        momentum * 0.12 +
+        pillars.environment * 0.18 +
+        sentimentScore * 0.05 +
+        sectorScore * 0.05
+    ),
+    sixMonth: clamp10(
+      pillars.fundamental * 0.3 +
+        pillars.environment * 0.24 +
+        pillars.technical * 0.14 +
+        pillars.intelligence * 0.12 +
+        momentum * 0.08 +
+        sentimentScore * 0.04 +
+        sectorScore * 0.08
+    ),
+    oneYear: clamp10(
+      pillars.fundamental * 0.36 +
+        pillars.environment * 0.28 +
+        pillars.technical * 0.1 +
+        pillars.intelligence * 0.08 +
+        momentum * 0.05 +
+        sentimentScore * 0.03 +
+        sectorScore * 0.1
+    ),
+  };
+}
+
 export function computeMetrics(item: Item): RowMetrics {
   const { pillars, technicals, profile } = computePillars(item);
   const { riskScore, riskLabel } = computeRisk(item, technicals);
-
-  const swingExpanded = scaleTo10(num(item.swingScore, 62));
-  const threeMonthExpanded = scaleTo10(num(item.threeMonthScore, 60));
-  const sixMonthExpanded = scaleTo10(num(item.sixMonthScore, 59));
-  const oneYearExpanded = scaleTo10(num(item.oneYearScore, 58));
 
   const momentum = clamp10(
     (pillars.technical * 0.5 +
       pillars.intelligence * 0.35 +
       (technicals.trendAligned ? 8.2 : 4.2) * 0.15)
   );
+  const sentiment = toSentiment(item.bias);
+  const derivedHorizons = deriveDynamicHorizonScores({
+    pillars,
+    momentum,
+    sector: profile.sector,
+    sentiment,
+  });
+
+  const swingExpanded = item.swingScore == null ? derivedHorizons.swing : scaleTo10(item.swingScore);
+  const threeMonthExpanded = item.threeMonthScore == null ? derivedHorizons.threeMonth : scaleTo10(item.threeMonthScore);
+  const sixMonthExpanded = item.sixMonthScore == null ? derivedHorizons.sixMonth : scaleTo10(item.sixMonthScore);
+  const oneYearExpanded = item.oneYearScore == null ? derivedHorizons.oneYear : scaleTo10(item.oneYearScore);
 
   const baseInput = buildEngineInput({
     swingScore: swingExpanded,

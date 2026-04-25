@@ -230,7 +230,7 @@ export async function getIntelligence(
   const nowIso = new Date().toISOString();
 
   const items = await Promise.all(
-    symbols.map(async (symbol) => {
+    symbols.map(async (symbol, index) => {
       const context = marketContext[symbol];
       if (!context) {
         return null;
@@ -239,6 +239,26 @@ export async function getIntelligence(
       const analyses = horizon
         ? [await routeAnalysis(symbol, horizon, context)]
         : await routeAllHorizons(symbol, context);
+
+      if (forceRefresh && index < 3) {
+        const byHorizon = analyses.reduce<Record<string, number>>((acc, analysis) => {
+          acc[analysis.horizon] = Number(analysis.score.toFixed(2));
+          return acc;
+        }, {});
+        const rawFactors = analyses.reduce<Record<string, Record<string, number>>>((acc, analysis) => {
+          acc[analysis.horizon] = analysis.factorBreakdown;
+          return acc;
+        }, {});
+
+        console.debug("[intelligence.refresh:first-3]", {
+          symbol,
+          rawFactors,
+          swingScore: byHorizon.swing ?? null,
+          threeMonthScore: byHorizon.threeMonth ?? null,
+          sixMonthScore: byHorizon.sixMonth ?? null,
+          oneYearScore: byHorizon.oneYear ?? null,
+        });
+      }
 
       if (forceRefresh) {
         const loggedInSession = new Set<string>();
@@ -279,6 +299,23 @@ export async function getIntelligence(
   );
 
   const cleanItems = items.filter((item): item is IntelligenceSymbolSummary => item !== null);
+
+  if (forceRefresh) {
+    const requiredSymbols = ["AMD", "NVDA", "TSLA"];
+    const targetRows = cleanItems.filter((item) => requiredSymbols.includes(item.symbol));
+    if (targetRows.length === requiredSymbols.length) {
+      const signatures = targetRows.map((item) => {
+        const getScore = (name: AnalysisHorizon) => item.analyses.find((analysis) => analysis.horizon === name)?.score ?? 0;
+        return `${item.symbol}:${getScore("swing").toFixed(2)}|${getScore("threeMonth").toFixed(2)}|${getScore("sixMonth").toFixed(
+          2
+        )}|${getScore("oneYear").toFixed(2)}`;
+      });
+      console.debug("[intelligence.refresh:amd-nvda-tsla-compare]", {
+        signatures,
+        distinct: new Set(signatures).size === signatures.length,
+      });
+    }
+  }
   const [performance, bestSignals] = await Promise.all([getModulePerformance(), getBestSignals()]);
 
   const payload: IntelligenceApiResponse = {
