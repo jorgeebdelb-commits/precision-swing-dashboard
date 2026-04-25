@@ -121,6 +121,12 @@ export default function DashboardClientShell() {
       setLoading(true);
 
       try {
+        if (!supabase) {
+          setItems(seedWatchlist);
+          setSelectedSymbol(seedWatchlist[0]?.symbol ?? "");
+          return;
+        }
+
         const { data, error } = await supabase
           .from("watchlist")
           .select("*")
@@ -332,6 +338,18 @@ export default function DashboardClientShell() {
     };
 
     try {
+      if (!supabase) {
+        setItems((prev) => {
+          const exists = prev.some((x) => x.symbol === symbol);
+          if (exists) return prev;
+          return [...prev, row];
+        });
+        setSelectedSymbol(symbol);
+        setNewSymbol("");
+        setQuoteMessage(`${symbol} added locally.`);
+        return;
+      }
+
       const { error } = await supabase.from("watchlist").upsert(
         [
           {
@@ -375,6 +393,24 @@ export default function DashboardClientShell() {
     setDeletingSymbol(symbol);
 
     try {
+      if (!supabase) {
+        setItems((prev) => {
+          const updated = prev.filter((x) => x.symbol !== symbol);
+
+          if (selectedSymbol === symbol) {
+            setSelectedSymbol(updated[0]?.symbol ?? "");
+            setHistory([]);
+            setQuoteMeta(null);
+            setSentimentMeta(null);
+          }
+
+          return updated;
+        });
+
+        setQuoteMessage(`${symbol} removed locally.`);
+        return;
+      }
+
       const { error } = await supabase
         .from("watchlist")
         .delete()
@@ -452,14 +488,16 @@ export default function DashboardClientShell() {
         )
       );
 
-      await supabase
-        .from("watchlist")
-        .update({
-          price: num(data.price),
-          support: num(data.low),
-          resistance: num(data.high),
-        })
-        .eq("symbol", symbol);
+      if (supabase) {
+        await supabase
+          .from("watchlist")
+          .update({
+            price: num(data.price),
+            support: num(data.low),
+            resistance: num(data.high),
+          })
+          .eq("symbol", symbol);
+      }
 
       setHistory((prev) => [
         ...prev.slice(-59),
