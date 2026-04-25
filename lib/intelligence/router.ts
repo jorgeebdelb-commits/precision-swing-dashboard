@@ -24,16 +24,16 @@ function normalizeHorizon(horizon: string | HorizonKey | null | undefined): Hori
   return "swing";
 }
 
-export function routeAnalysis(
+export async function routeAnalysis(
   symbol: string,
   horizon: string | HorizonKey | null | undefined,
   marketContext: MarketContextSnapshot
-): AnalysisResult {
+): Promise<AnalysisResult> {
   const resolvedHorizon = normalizeHorizon(horizon);
   return ROUTE_MAP[resolvedHorizon]({ symbol, horizon: resolvedHorizon, marketContext });
 }
 
-export function routeAllHorizons(symbol: string, marketContext: MarketContextSnapshot): AnalysisResult[] {
+export async function routeAllHorizons(symbol: string, marketContext: MarketContextSnapshot): Promise<AnalysisResult[]> {
   const order: HorizonKey[] = ["swing", "threeMonth", "sixMonth", "oneYear"];
-  return order.map((horizon) => routeAnalysis(symbol, horizon, marketContext));
+  return Promise.all(order.map((horizon) => routeAnalysis(symbol, horizon, marketContext)));
 }

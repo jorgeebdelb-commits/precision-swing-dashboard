@@ -1,12 +1,12 @@
 import { getMacroContextWeights } from "@/lib/intelligence/macro";
 import { getPoliticalExposure } from "@/lib/intelligence/politics";
-import { getSectorFactorWeights } from "@/lib/intelligence/sectors";
+import { getAdaptiveWeights } from "@/lib/intelligence/weights";
 import { finalizePipeline } from "@/lib/intelligence/pipelines/helpers";
 import type { PipelineFn } from "@/lib/intelligence/types";
 
-export const fundamental1yPipeline: PipelineFn = (input) => {
+export const fundamental1yPipeline: PipelineFn = async (input) => {
   const { marketContext, symbol } = input;
-  const factorWeights = getSectorFactorWeights("oneYear", marketContext.sector);
+  const factorWeights = await getAdaptiveWeights(symbol, marketContext.sector, "oneYear");
   const macro = getMacroContextWeights("oneYear");
   const politics = getPoliticalExposure({ symbol, sector: marketContext.sector, horizon: "oneYear" });
 
