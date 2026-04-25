@@ -34,11 +34,13 @@ export type SentimentResponse = {
 };
 
 export type Strategy =
-  | "Calls Only"
-  | "Shares + Calls"
-  | "Shares Only"
-  | "Starter Size"
-  | "No Trade";
+  | "Buy Shares"
+  | "Buy Shares + Calls"
+  | "Buy Calls"
+  | "Starter Size Only"
+  | "Watch"
+  | "Avoid"
+  | "Buy Puts";
 
 export type HorizonKey =
   | "swing"
