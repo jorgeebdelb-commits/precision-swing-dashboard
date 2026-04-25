@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   Item,
+  HorizonKey,
+  Strategy,
   QuoteResponse,
   SentimentResponse,
   SortKey,
@@ -10,6 +12,7 @@ import type {
 import { computeMetrics, type RowMetrics } from "@/engines/strategy";
 import { supabase } from "@/app/lib/supabase";
 import { num, upper } from "@/app/lib/helpers";
+import type { IntelligenceApiResponse } from "@/lib/intelligence/types";
 
 type RowData = {
   item: Item;
@@ -103,6 +106,10 @@ const mapWatchlistRowToItem = (row: Record<string, unknown>): Item => {
     symbol: typeof row.symbol === "string" ? row.symbol : "",
     bias,
     price: num(getValue("price", "last_price")),
+    swingScore: toOptionalNumber("swingScore", "swing_score"),
+    threeMonthScore: toOptionalNumber("threeMonthScore", "three_month_score"),
+    sixMonthScore: toOptionalNumber("sixMonthScore", "six_month_score"),
+    oneYearScore: toOptionalNumber("oneYearScore", "one_year_score"),
     support: num(getValue("support")),
     resistance: num(getValue("resistance")),
     rsi: num(getValue("rsi"), 50),
@@ -132,6 +139,10 @@ const toWatchlistRow = (row: Item) => ({
   symbol: row.symbol,
   bias: row.bias,
   price: row.price,
+  swingScore: row.swingScore,
+  threeMonthScore: row.threeMonthScore,
+  sixMonthScore: row.sixMonthScore,
+  oneYearScore: row.oneYearScore,
   support: row.support,
   resistance: row.resistance,
   rsi: row.rsi,
@@ -142,6 +153,20 @@ const toWatchlistRow = (row: Item) => ({
   politicalScore: row.politicalScore,
   notes: row.notes,
 });
+
+const HORIZON_FIELD_MAP: Record<HorizonKey, keyof Pick<Item, "swingScore" | "threeMonthScore" | "sixMonthScore" | "oneYearScore">> =
+  {
+    swing: "swingScore",
+    threeMonth: "threeMonthScore",
+    sixMonth: "sixMonthScore",
+    oneYear: "oneYearScore",
+  };
+
+function strategyToBias(strategy: Strategy): Item["bias"] {
+  if (strategy === "Avoid" || strategy === "Buy Puts") return "Bearish";
+  if (strategy === "Buy Shares" || strategy === "Buy Shares + Calls" || strategy === "Buy Calls") return "Bullish";
+  return "Watch";
+}
 
 export default function DashboardClientShell() {
   const sitePassword = process.env.NEXT_PUBLIC_SITE_PASSWORD ?? "";
@@ -587,6 +612,65 @@ export default function DashboardClientShell() {
       await refreshSentimentData();
       await refreshWhalesData();
       await refreshMacroData();
+      const symbols = items.map((entry) => entry.symbol);
+      const intelligenceRes = await fetch("/api/intelligence/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbols, force: true }),
+      });
+
+      if (intelligenceRes.ok) {
+        const intelligenceData = (await intelligenceRes.json()) as IntelligenceApiResponse;
+        const symbolMap = new Map(intelligenceData.items.map((entry) => [entry.symbol, entry]));
+
+        const debugRows: Array<{ symbol: string; swing: number; threeMonth: number; sixMonth: number; oneYear: number }> = [];
+
+        setItems((prev) =>
+          prev.map((row, index) => {
+            const summary = symbolMap.get(row.symbol);
+            if (!summary) return row;
+
+            const updates: Partial<Item> = {};
+            for (const analysis of summary.analyses) {
+              const key = HORIZON_FIELD_MAP[analysis.horizon];
+              updates[key] = Number(analysis.score.toFixed(2));
+            }
+
+            const merged = { ...row, ...updates, bias: strategyToBias(summary.analyses[0]?.strategy ?? "Watch") };
+            if (index < 3) {
+              debugRows.push({
+                symbol: merged.symbol,
+                swing: num(merged.swingScore),
+                threeMonth: num(merged.threeMonthScore),
+                sixMonth: num(merged.sixMonthScore),
+                oneYear: num(merged.oneYearScore),
+              });
+            }
+            return merged;
+          })
+        );
+
+        if (debugRows.length) {
+          console.debug("[refresh][horizon-scores:first-3]", debugRows);
+          const amd = debugRows.find((row) => row.symbol === "AMD");
+          const nvda = debugRows.find((row) => row.symbol === "NVDA");
+          const tsla = debugRows.find((row) => row.symbol === "TSLA");
+          if (amd && nvda && tsla) {
+            console.debug("[refresh][verification:AMD_NVDA_TSLA]", {
+              amd,
+              nvda,
+              tsla,
+              distinct:
+                new Set([
+                  `${amd.swing}|${amd.threeMonth}|${amd.sixMonth}|${amd.oneYear}`,
+                  `${nvda.swing}|${nvda.threeMonth}|${nvda.sixMonth}|${nvda.oneYear}`,
+                  `${tsla.swing}|${tsla.threeMonth}|${tsla.sixMonth}|${tsla.oneYear}`,
+                ]).size === 3,
+            });
+          }
+        }
+      }
+
       await recalculateHorizonScores();
       await recalculateStrategyRecommendations();
       const saved = await saveWatchlist();
