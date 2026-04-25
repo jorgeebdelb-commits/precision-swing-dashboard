@@ -1,5 +1,4 @@
 import type {
-  HorizonKey,
   Item,
   MarketRegime,
   Strategy,
@@ -11,6 +10,7 @@ import {
 } from "../lib/intelligence/recommendationEngine";
 
 import { clamp, formatPrice, num } from "../app/lib/helpers";
+import { routeAnalysis } from "@/lib/intelligence/router";
 
 export type RiskLabel = "Low" | "Medium" | "High" | "Extreme";
 type RiskBucket = RiskLabel | `${RiskLabel}/${RiskLabel}`;
@@ -463,45 +463,6 @@ export function computeRisk(
   return { riskScore, riskLabel };
 }
 
-function weightedHorizonScore(horizon: HorizonKey, pillars: PillarScores, profile: TickerProfile): number {
-  if (horizon === "swing") {
-    return clamp10(
-      pillars.technical * 0.5 +
-        pillars.intelligence * 0.26 +
-        pillars.environment * 0.14 +
-        pillars.fundamental * 0.1 +
-        profile.momentumTilt * 0.18
-    );
-  }
-
-  if (horizon === "threeMonth") {
-    return clamp10(
-      pillars.technical * 0.3 +
-        pillars.fundamental * 0.31 +
-        pillars.intelligence * 0.24 +
-        pillars.environment * 0.15
-    );
-  }
-
-  if (horizon === "sixMonth") {
-    return clamp10(
-      pillars.fundamental * 0.42 +
-        pillars.technical * 0.23 +
-        pillars.environment * 0.22 +
-        pillars.intelligence * 0.13 +
-        profile.qualityTilt * 0.12
-    );
-  }
-
-  return clamp10(
-    pillars.fundamental * 0.47 +
-      pillars.environment * 0.26 +
-      pillars.technical * 0.18 +
-      pillars.intelligence * 0.09 +
-      profile.qualityTilt * 0.16
-  );
-}
-
 function toSentiment(bias: Item["bias"]): "Bullish" | "Neutral" | "Bearish" {
   if (bias === "Bullish") return "Bullish";
   if (bias === "Bearish") return "Bearish";
@@ -645,27 +606,29 @@ function buildEngineInput(params: {
   };
 }
 
-function expandScoreRange(score: number, riskScore: number, profile: TickerProfile): number {
-  const centered = score - 6.6;
-  const amplified = 6.8 + centered * 1.72 + Math.sign(centered) * Math.abs(centered) * 0.2;
-  const riskDrag = (riskScore - 55) * 0.016;
-  const qualityBoost = profile.speculative ? -0.2 : 0.24;
-  return clamp10(amplified - riskDrag + qualityBoost);
-}
-
 export function computeMetrics(item: Item): RowMetrics {
   const { pillars, technicals, profile } = computePillars(item);
   const { riskScore, riskLabel } = computeRisk(item, technicals);
 
-  const swing = weightedHorizonScore("swing", pillars, profile);
-  const threeMonth = weightedHorizonScore("threeMonth", pillars, profile);
-  const sixMonth = weightedHorizonScore("sixMonth", pillars, profile);
-  const oneYear = weightedHorizonScore("oneYear", pillars, profile);
+  const marketContext = {
+    price: num(item.price),
+    rsi: num(item.rsi, 50),
+    volumeRatio: num(item.volumeRatio, 1),
+    technicalScore: pillars.technical,
+    macroScore: pillars.fundamental,
+    politicalScore: pillars.environment,
+    earningsDays: item.earningsDays == null ? null : num(item.earningsDays),
+    newsSentiment: pillars.intelligence,
+    flowScore: scaleTo10(num(item.whaleScore, 60)),
+    volatility: technicals.volatilityPercent / 10,
+    trendSlope: (technicals.lr50Slope + technicals.lr100Slope) / 20,
+    sector: profile.sector,
+  };
 
-  const swingExpanded = expandScoreRange(swing, riskScore, profile);
-  const threeMonthExpanded = expandScoreRange(threeMonth, riskScore, profile);
-  const sixMonthExpanded = expandScoreRange(sixMonth, riskScore, profile);
-  const oneYearExpanded = expandScoreRange(oneYear, riskScore, profile);
+  const swingExpanded = routeAnalysis(item.symbol, "swing", marketContext).score;
+  const threeMonthExpanded = routeAnalysis(item.symbol, "threeMonth", marketContext).score;
+  const sixMonthExpanded = routeAnalysis(item.symbol, "sixMonth", marketContext).score;
+  const oneYearExpanded = routeAnalysis(item.symbol, "oneYear", marketContext).score;
 
   const momentum = clamp10(
     (pillars.technical * 0.5 +
@@ -687,9 +650,21 @@ export function computeMetrics(item: Item): RowMetrics {
 
   const finalDecision = evaluateRecommendation(baseInput);
   const swingDecision = evaluateRecommendation({ ...baseInput, swingScore: swingExpanded });
-  const threeMonthDecision = evaluateRecommendation({ ...baseInput, swingScore: threeMonthExpanded });
-  const sixMonthDecision = evaluateRecommendation({ ...baseInput, swingScore: sixMonthExpanded });
-  const oneYearDecision = evaluateRecommendation({ ...baseInput, swingScore: oneYearExpanded });
+  const threeMonthDecision = evaluateRecommendation({
+    ...baseInput,
+    swingScore: threeMonthExpanded,
+    threeMonthScore: threeMonthExpanded,
+  });
+  const sixMonthDecision = evaluateRecommendation({
+    ...baseInput,
+    swingScore: sixMonthExpanded,
+    sixMonthScore: sixMonthExpanded,
+  });
+  const oneYearDecision = evaluateRecommendation({
+    ...baseInput,
+    swingScore: oneYearExpanded,
+    oneYearScore: oneYearExpanded,
+  });
 
   const swingSignal = swingDecision.rating;
   const threeMonthSignal = threeMonthDecision.rating;

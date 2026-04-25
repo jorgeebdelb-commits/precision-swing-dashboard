@@ -1,12 +1,7 @@
-import { routeAnalysis } from "@/lib/intelligence/router";
+import { routeAllHorizons, routeAnalysis } from "@/lib/intelligence/router";
 import { getBestSignals, getModulePerformance, logSignalRun } from "@/lib/intelligence/performance";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import type {
-  AnalysisHorizon,
-  IntelligenceApiResponse,
-  IntelligenceSymbolSummary,
-  MarketContextSnapshot,
-} from "@/lib/intelligence/types";
+import type { AnalysisHorizon, IntelligenceApiResponse, IntelligenceSymbolSummary, MarketContextSnapshot } from "@/lib/intelligence/types";
 
 interface WatchlistRow {
   symbol: string;
@@ -55,7 +50,7 @@ function toScore10(value: number): number {
 
 function resolveBestHorizon(analyses: IntelligenceSymbolSummary["analyses"]): AnalysisHorizon {
   const top = [...analyses].sort((a, b) => b.score - a.score)[0];
-  return top?.horizon ?? "Short-Term";
+  return top?.horizon ?? "swing";
 }
 
 async function getCachedDashboard(cacheKey: string): Promise<IntelligenceApiResponse | null> {
@@ -206,24 +201,23 @@ export async function getIntelligence(
         return null;
       }
 
-      const runs = await routeAnalysis(symbol, horizon, {
-        context: { symbol, market: context },
-        nowIso,
-      });
+      const analyses = horizon
+        ? [routeAnalysis(symbol, horizon, context)]
+        : routeAllHorizons(symbol, context);
 
-      for (const run of runs) {
+      for (const analysis of analyses) {
         await logSignalRun({
           symbol,
-          horizon: run.result.horizon,
-          moduleName: run.moduleName,
-          recommendation: run.result.recommendation,
-          score: run.result.score,
-          triggeredSignals: run.result.triggeredSignals,
+          horizon: analysis.horizon,
+          moduleName: analysis.horizon,
+          recommendation: analysis.rating,
+          score: analysis.score,
+          triggeredSignals: Object.keys(analysis.factorBreakdown).filter(
+            (key) => (analysis.factorBreakdown[key] ?? 0) >= 6
+          ),
           marketContext: context,
         });
       }
-
-      const analyses = runs.map((run) => run.result);
       return {
         symbol,
         analyses,
