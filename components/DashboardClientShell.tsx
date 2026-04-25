@@ -8,7 +8,6 @@ import type {
   SortKey,
 } from "@/types/dashboard";
 import { computeMetrics, type RowMetrics } from "@/engines/strategy";
-import { watchlist as seedWatchlist } from "@/app/lib/watchlist";
 import { supabase } from "@/app/lib/supabase";
 import { num, upper } from "@/app/lib/helpers";
 
@@ -79,6 +78,71 @@ function statCardStyle() {
   } as const;
 }
 
+const WATCHLIST_CACHE_KEY = "precision-dashboard-watchlist-cache";
+
+const mapWatchlistRowToItem = (row: Record<string, unknown>): Item => {
+  const getValue = (...keys: string[]) => {
+    for (const key of keys) {
+      if (row[key] !== undefined) return row[key];
+    }
+    return undefined;
+  };
+
+  const toOptionalNumber = (...keys: string[]) => {
+    const value = getValue(...keys);
+    return value === undefined ? undefined : num(value);
+  };
+
+  const rawBias = row.bias;
+  const bias: Item["bias"] =
+    rawBias === "Bullish" || rawBias === "Bearish" || rawBias === "Watch"
+      ? rawBias
+      : "Watch";
+
+  return {
+    symbol: typeof row.symbol === "string" ? row.symbol : "",
+    bias,
+    price: num(getValue("price", "last_price")),
+    support: num(getValue("support")),
+    resistance: num(getValue("resistance")),
+    rsi: num(getValue("rsi"), 50),
+    volumeRatio: num(getValue("volumeRatio", "volume_ratio"), 1),
+    technicalScore: num(getValue("technicalScore", "technical_score", "tech"), 70),
+    whaleScore: num(getValue("whaleScore", "whale_score", "intel"), 60),
+    macroScore: num(getValue("macroScore", "macro_score"), 60),
+    politicalScore: num(getValue("politicalScore", "political_score", "env"), 60),
+    lr50: toOptionalNumber("lr50", "lr_50"),
+    lr50Slope: toOptionalNumber("lr50Slope", "lr_50_slope"),
+    lr100: toOptionalNumber("lr100", "lr_100"),
+    lr100Slope: toOptionalNumber("lr100Slope", "lr_100_slope"),
+    fibSupport: toOptionalNumber("fibSupport", "fib_support"),
+    fibResistance: toOptionalNumber("fibResistance", "fib_resistance"),
+    atrPercent: toOptionalNumber("atrPercent", "atr_percent"),
+    betaProxy: toOptionalNumber("betaProxy", "beta_proxy"),
+    priceVolatility: toOptionalNumber("priceVolatility", "price_volatility"),
+    ivPercentile: toOptionalNumber("ivPercentile", "iv_percentile"),
+    earningsDays: toOptionalNumber("earningsDays", "earnings_days"),
+    notes: Array.isArray(row.notes)
+      ? row.notes.filter((note): note is string => typeof note === "string")
+      : [],
+  };
+};
+
+const toWatchlistRow = (row: Item) => ({
+  symbol: row.symbol,
+  bias: row.bias,
+  price: row.price,
+  support: row.support,
+  resistance: row.resistance,
+  rsi: row.rsi,
+  volumeRatio: row.volumeRatio,
+  technicalScore: row.technicalScore,
+  whaleScore: row.whaleScore,
+  macroScore: row.macroScore,
+  politicalScore: row.politicalScore,
+  notes: row.notes,
+});
+
 export default function DashboardClientShell() {
   const sitePassword = process.env.NEXT_PUBLIC_SITE_PASSWORD ?? "";
 
@@ -93,6 +157,7 @@ export default function DashboardClientShell() {
   const [loading, setLoading] = useState(true);
   const [refreshingIntelligence, setRefreshingIntelligence] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [savingEdits, setSavingEdits] = useState(false);
   const [deletingSymbol, setDeletingSymbol] = useState("");
 
   const [intelligenceMessage, setIntelligenceMessage] = useState("");
@@ -119,8 +184,25 @@ export default function DashboardClientShell() {
 
       try {
         if (!supabase) {
-          setItems(seedWatchlist);
-          setSelectedSymbol(seedWatchlist[0]?.symbol ?? "");
+          const cached = localStorage.getItem(WATCHLIST_CACHE_KEY);
+          if (!cached) {
+            setItems([]);
+            setSelectedSymbol("");
+            return;
+          }
+
+          const parsed: unknown = JSON.parse(cached);
+          const cachedItems = Array.isArray(parsed)
+            ? parsed.filter(
+                (entry): entry is Item =>
+                  typeof entry === "object" &&
+                  entry !== null &&
+                  typeof (entry as Item).symbol === "string"
+              )
+            : [];
+
+          setItems(cachedItems);
+          setSelectedSymbol(cachedItems[0]?.symbol ?? "");
           return;
         }
 
@@ -129,66 +211,20 @@ export default function DashboardClientShell() {
           .select("*")
           .order("created_at", { ascending: true });
 
-        if (error || !data || data.length === 0) {
-          setItems(seedWatchlist);
-          setSelectedSymbol(seedWatchlist[0]?.symbol ?? "");
+        if (error) {
+          setIntelligenceMessage(`Failed to load watchlist: ${error.message}`);
           return;
         }
 
-        const mapped: Item[] = data
-          .map((row: Record<string, unknown>) => {
-            const getValue = (...keys: string[]) => {
-              for (const key of keys) {
-                if (row[key] !== undefined) return row[key];
-              }
-              return undefined;
-            };
-            const toOptionalNumber = (...keys: string[]) => {
-              const value = getValue(...keys);
-              return value === undefined ? undefined : num(value);
-            };
-
-            const rawBias = row.bias;
-            const bias: Item["bias"] =
-              rawBias === "Bullish" || rawBias === "Bearish" || rawBias === "Watch"
-                ? rawBias
-                : "Watch";
-
-            return {
-              symbol: typeof row.symbol === "string" ? row.symbol : "",
-              bias,
-              price: num(getValue("price", "last_price")),
-              support: num(getValue("support")),
-              resistance: num(getValue("resistance")),
-              rsi: num(getValue("rsi"), 50),
-              volumeRatio: num(getValue("volumeRatio", "volume_ratio"), 1),
-              technicalScore: num(
-                getValue("technicalScore", "technical_score", "tech"),
-                70
-              ),
-              whaleScore: num(getValue("whaleScore", "whale_score", "intel"), 60),
-              macroScore: num(getValue("macroScore", "macro_score"), 60),
-              politicalScore: num(getValue("politicalScore", "political_score", "env"), 60),
-              lr50: toOptionalNumber("lr50", "lr_50"),
-              lr50Slope: toOptionalNumber("lr50Slope", "lr_50_slope"),
-              lr100: toOptionalNumber("lr100", "lr_100"),
-              lr100Slope: toOptionalNumber("lr100Slope", "lr_100_slope"),
-              fibSupport: toOptionalNumber("fibSupport", "fib_support"),
-              fibResistance: toOptionalNumber("fibResistance", "fib_resistance"),
-              atrPercent: toOptionalNumber("atrPercent", "atr_percent"),
-              betaProxy: toOptionalNumber("betaProxy", "beta_proxy"),
-              priceVolatility: toOptionalNumber("priceVolatility", "price_volatility"),
-              ivPercentile: toOptionalNumber("ivPercentile", "iv_percentile"),
-              earningsDays: toOptionalNumber("earningsDays", "earnings_days"),
-              notes: Array.isArray(row.notes)
-                ? row.notes.filter((note): note is string => typeof note === "string")
-                : [],
-            };
-          })
+        const mapped: Item[] = (data ?? [])
+          .map((row: Record<string, unknown>) => mapWatchlistRowToItem(row))
           .filter((item) => item.symbol);
 
         setItems(mapped);
         setSelectedSymbol(mapped[0]?.symbol ?? "");
+        localStorage.setItem(WATCHLIST_CACHE_KEY, JSON.stringify(mapped));
+      } catch {
+        setIntelligenceMessage("Failed to load watchlist.");
       } finally {
         setLoading(false);
       }
@@ -315,6 +351,10 @@ export default function DashboardClientShell() {
   const addSymbol = async () => {
     const symbol = upper(newSymbol);
     if (!symbol) return;
+    if (items.some((item) => item.symbol === symbol)) {
+      setIntelligenceMessage(`${symbol} already exists.`);
+      return;
+    }
 
     setAdding(true);
     setIntelligenceMessage("");
@@ -333,54 +373,32 @@ export default function DashboardClientShell() {
       politicalScore: 60,
       notes: ["New symbol added"],
     };
+    const previousItems = items;
+    const nextItems = [...items, row];
+
+    setItems(nextItems);
+    setSelectedSymbol(symbol);
+    setNewSymbol("");
 
     try {
       if (!supabase) {
-        setItems((prev) => {
-          const exists = prev.some((x) => x.symbol === symbol);
-          if (exists) return prev;
-          return [...prev, row];
-        });
-        setSelectedSymbol(symbol);
-        setNewSymbol("");
-        setIntelligenceMessage(`${symbol} added locally.`);
+        localStorage.setItem(WATCHLIST_CACHE_KEY, JSON.stringify(nextItems));
+        setIntelligenceMessage(`${symbol} added (local fallback cache).`);
         return;
       }
 
-      const { error } = await supabase.from("watchlist").upsert(
-        [
-          {
-            symbol: row.symbol,
-            bias: row.bias,
-            price: row.price,
-            support: row.support,
-            resistance: row.resistance,
-            rsi: row.rsi,
-            volumeRatio: row.volumeRatio,
-            technicalScore: row.technicalScore,
-            whaleScore: row.whaleScore,
-            macroScore: row.macroScore,
-            politicalScore: row.politicalScore,
-            notes: row.notes,
-          },
-        ],
-        { onConflict: "symbol" }
-      );
+      const { error } = await supabase
+        .from("watchlist")
+        .insert([toWatchlistRow(row)]);
 
       if (error) {
+        setItems(previousItems);
         setIntelligenceMessage(error.message);
         return;
       }
 
-      setItems((prev) => {
-        const exists = prev.some((x) => x.symbol === symbol);
-        if (exists) return prev;
-        return [...prev, row];
-      });
-
-      setSelectedSymbol(symbol);
-      setNewSymbol("");
-      setIntelligenceMessage(`${symbol} saved.`);
+      setIntelligenceMessage(`${symbol} added.`);
+      localStorage.setItem(WATCHLIST_CACHE_KEY, JSON.stringify(nextItems));
     } finally {
       setAdding(false);
     }
@@ -388,23 +406,14 @@ export default function DashboardClientShell() {
 
   const removeSymbol = async (symbol: string) => {
     setDeletingSymbol(symbol);
+    const previousItems = items;
+    const updatedItems = items.filter((item) => item.symbol !== symbol);
+    setItems(updatedItems);
 
     try {
       if (!supabase) {
-        setItems((prev) => {
-          const updated = prev.filter((x) => x.symbol !== symbol);
-
-          if (selectedSymbol === symbol) {
-            setSelectedSymbol(updated[0]?.symbol ?? "");
-            setHistory([]);
-            setQuoteMeta(null);
-            setSentimentMeta(null);
-          }
-
-          return updated;
-        });
-
-        setIntelligenceMessage(`${symbol} removed locally.`);
+        localStorage.setItem(WATCHLIST_CACHE_KEY, JSON.stringify(updatedItems));
+        setIntelligenceMessage(`${symbol} removed (local fallback cache).`);
         return;
       }
 
@@ -414,25 +423,20 @@ export default function DashboardClientShell() {
         .eq("symbol", symbol);
 
       if (error) {
+        setItems(previousItems);
         setIntelligenceMessage(error.message);
         return;
       }
 
-      setItems((prev) => {
-        const updated = prev.filter((x) => x.symbol !== symbol);
-
-        if (selectedSymbol === symbol) {
-          setSelectedSymbol(updated[0]?.symbol ?? "");
-          setHistory([]);
-          setQuoteMeta(null);
-          setSentimentMeta(null);
-        }
-
-        return updated;
-      });
-
+      localStorage.setItem(WATCHLIST_CACHE_KEY, JSON.stringify(updatedItems));
       setIntelligenceMessage(`${symbol} deleted.`);
     } finally {
+      if (selectedSymbol === symbol) {
+        setSelectedSymbol(updatedItems[0]?.symbol ?? "");
+        setHistory([]);
+        setQuoteMeta(null);
+        setSentimentMeta(null);
+      }
       setDeletingSymbol("");
     }
   };
@@ -548,25 +552,27 @@ export default function DashboardClientShell() {
   };
 
   const saveWatchlist = async () => {
-    if (!supabase) return;
+    if (!supabase) {
+      localStorage.setItem(WATCHLIST_CACHE_KEY, JSON.stringify(items));
+      setIntelligenceMessage("Saved to local fallback cache.");
+      return true;
+    }
 
-    await supabase.from("watchlist").upsert(
+    const { error } = await supabase.from("watchlist").upsert(
       items.map((row) => ({
-        symbol: row.symbol,
-        bias: row.bias,
-        price: row.price,
-        support: row.support,
-        resistance: row.resistance,
-        rsi: row.rsi,
-        volumeRatio: row.volumeRatio,
-        technicalScore: row.technicalScore,
-        whaleScore: row.whaleScore,
-        macroScore: row.macroScore,
-        politicalScore: row.politicalScore,
-        notes: row.notes,
+        ...toWatchlistRow(row),
       })),
       { onConflict: "symbol" }
     );
+
+    if (error) {
+      setIntelligenceMessage(`Save failed: ${error.message}`);
+      return false;
+    }
+
+    localStorage.setItem(WATCHLIST_CACHE_KEY, JSON.stringify(items));
+    setIntelligenceMessage("Watchlist saved.");
+    return true;
   };
 
   const refreshIntelligence = async () => {
@@ -583,11 +589,27 @@ export default function DashboardClientShell() {
       await refreshMacroData();
       await recalculateHorizonScores();
       await recalculateStrategyRecommendations();
-      await saveWatchlist();
-      setLastRefresh(new Date().toLocaleTimeString());
-      setIntelligenceMessage("Intelligence refreshed.");
+      const saved = await saveWatchlist();
+      if (saved) {
+        setLastRefresh(new Date().toLocaleTimeString());
+        setIntelligenceMessage("Intelligence refreshed.");
+      }
     } finally {
       setRefreshingIntelligence(false);
+    }
+  };
+
+  const handleSaveButton = async () => {
+    if (newSymbol.trim()) {
+      await addSymbol();
+      return;
+    }
+
+    setSavingEdits(true);
+    try {
+      await saveWatchlist();
+    } finally {
+      setSavingEdits(false);
     }
   };
 
@@ -879,8 +901,8 @@ export default function DashboardClientShell() {
         />
 
         <button
-          onClick={addSymbol}
-          disabled={adding}
+          onClick={() => void handleSaveButton()}
+          disabled={adding || savingEdits}
           style={{
             padding: "12px 16px",
             borderRadius: 12,
@@ -891,7 +913,7 @@ export default function DashboardClientShell() {
             fontWeight: 800,
           }}
         >
-          {adding ? "Saving..." : "Save"}
+          {adding || savingEdits ? "Saving..." : "Save"}
         </button>
 
         <span style={{ color: "#94a3b8", fontSize: 13 }}>
