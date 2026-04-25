@@ -1,5 +1,5 @@
 import { routeAllHorizons, routeAnalysis } from "@/lib/intelligence/router";
-import { getBestSignals, getModulePerformance, logSignalRun } from "@/lib/intelligence/performance";
+import { getBestSignals, getModulePerformance, logSignal } from "@/lib/intelligence/performance";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import type { AnalysisHorizon, IntelligenceApiResponse, IntelligenceSymbolSummary, MarketContextSnapshot } from "@/lib/intelligence/types";
 
@@ -202,21 +202,37 @@ export async function getIntelligence(
       }
 
       const analyses = horizon
-        ? [routeAnalysis(symbol, horizon, context)]
-        : routeAllHorizons(symbol, context);
+        ? [await routeAnalysis(symbol, horizon, context)]
+        : await routeAllHorizons(symbol, context);
 
-      for (const analysis of analyses) {
-        await logSignalRun({
-          symbol,
-          horizon: analysis.horizon,
-          moduleName: analysis.horizon,
-          recommendation: analysis.rating,
-          score: analysis.score,
-          triggeredSignals: Object.keys(analysis.factorBreakdown).filter(
-            (key) => (analysis.factorBreakdown[key] ?? 0) >= 6
-          ),
-          marketContext: context,
-        });
+      if (forceRefresh) {
+        const loggedInSession = new Set<string>();
+        for (const analysis of analyses) {
+          const dedupeKey = `${symbol}::${analysis.horizon}`;
+          if (loggedInSession.has(dedupeKey)) continue;
+          loggedInSession.add(dedupeKey);
+
+          const factorWeights = analysis.factorWeights.reduce<Record<string, number>>((acc, item) => {
+            acc[item.factor] = item.weight;
+            return acc;
+          }, {});
+
+          await logSignal({
+            symbol,
+            sector: context.sector ?? null,
+            horizon: analysis.horizon,
+            rating: analysis.rating,
+            strategy: analysis.strategy,
+            confidence: analysis.confidence,
+            risk: analysis.risk,
+            score: analysis.score,
+            entryPrice: context.price || null,
+            factorWeights,
+            factorBreakdown: analysis.factorBreakdown,
+            reason: analysis.reason,
+            modelVersion: "v1",
+          });
+        }
       }
       return {
         symbol,

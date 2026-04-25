@@ -1,12 +1,12 @@
 import { getMacroContextWeights } from "@/lib/intelligence/macro";
 import { getPoliticalExposure } from "@/lib/intelligence/politics";
-import { getSectorFactorWeights } from "@/lib/intelligence/sectors";
+import { getAdaptiveWeights } from "@/lib/intelligence/weights";
 import { finalizePipeline } from "@/lib/intelligence/pipelines/helpers";
 import type { PipelineFn } from "@/lib/intelligence/types";
 
-export const fundamental3mPipeline: PipelineFn = (input) => {
+export const fundamental3mPipeline: PipelineFn = async (input) => {
   const { marketContext, symbol } = input;
-  const factorWeights = getSectorFactorWeights("threeMonth", marketContext.sector);
+  const factorWeights = await getAdaptiveWeights(symbol, marketContext.sector, "threeMonth");
   const macro = getMacroContextWeights("threeMonth");
   const politics = getPoliticalExposure({ symbol, sector: marketContext.sector, horizon: "threeMonth" });
   const earningsWindow = marketContext.earningsDays == null ? 5.8 : Math.max(1, Math.min(10, 9.3 - marketContext.earningsDays / 9));

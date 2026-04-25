@@ -10,7 +10,6 @@ import {
 } from "../lib/intelligence/recommendationEngine";
 
 import { clamp, formatPrice, num } from "../app/lib/helpers";
-import { routeAnalysis } from "@/lib/intelligence/router";
 
 export type RiskLabel = "Low" | "Medium" | "High" | "Extreme";
 type RiskBucket = RiskLabel | `${RiskLabel}/${RiskLabel}`;
@@ -610,25 +609,10 @@ export function computeMetrics(item: Item): RowMetrics {
   const { pillars, technicals, profile } = computePillars(item);
   const { riskScore, riskLabel } = computeRisk(item, technicals);
 
-  const marketContext = {
-    price: num(item.price),
-    rsi: num(item.rsi, 50),
-    volumeRatio: num(item.volumeRatio, 1),
-    technicalScore: pillars.technical,
-    macroScore: pillars.fundamental,
-    politicalScore: pillars.environment,
-    earningsDays: item.earningsDays == null ? null : num(item.earningsDays),
-    newsSentiment: pillars.intelligence,
-    flowScore: scaleTo10(num(item.whaleScore, 60)),
-    volatility: technicals.volatilityPercent / 10,
-    trendSlope: (technicals.lr50Slope + technicals.lr100Slope) / 20,
-    sector: profile.sector,
-  };
-
-  const swingExpanded = routeAnalysis(item.symbol, "swing", marketContext).score;
-  const threeMonthExpanded = routeAnalysis(item.symbol, "threeMonth", marketContext).score;
-  const sixMonthExpanded = routeAnalysis(item.symbol, "sixMonth", marketContext).score;
-  const oneYearExpanded = routeAnalysis(item.symbol, "oneYear", marketContext).score;
+  const swingExpanded = scaleTo10(num(item.swingScore, 62));
+  const threeMonthExpanded = scaleTo10(num(item.threeMonthScore, 60));
+  const sixMonthExpanded = scaleTo10(num(item.sixMonthScore, 59));
+  const oneYearExpanded = scaleTo10(num(item.oneYearScore, 58));
 
   const momentum = clamp10(
     (pillars.technical * 0.5 +

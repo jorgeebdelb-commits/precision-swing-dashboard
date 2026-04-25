@@ -58,16 +58,29 @@ export interface PipelineInput {
   marketContext: MarketContextSnapshot;
 }
 
-export type PipelineFn = (input: PipelineInput) => AnalysisResult;
+export type PipelineFn = (input: PipelineInput) => Promise<AnalysisResult>;
 
-export interface PerformanceLogInsert {
+export interface IntelligenceSignal {
+  id: string;
   symbol: string;
+  sector?: string | null;
   horizon: AnalysisHorizon;
-  moduleName: HorizonKey;
-  recommendation: string;
+  rating: RatingLabel;
+  strategy?: StrategyRecommendation | string | null;
+  confidence: ConfidenceLevel;
+  risk: RiskLevel;
   score: number;
-  triggeredSignals: string[];
-  marketContext: MarketContextSnapshot;
+  entry_price: number | null;
+  target_price: number | null;
+  stop_price: number | null;
+  factor_weights: Record<string, number> | null;
+  factor_breakdown: Record<string, number> | null;
+  reason: string | null;
+  created_at: string;
+  evaluated_at: string | null;
+  outcome_return: number | null;
+  outcome_status: string | null;
+  model_version: string;
 }
 
 export interface ModulePerformance {

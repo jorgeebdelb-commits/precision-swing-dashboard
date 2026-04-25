@@ -1,25 +1,71 @@
-import { getSupabaseServerClient } from "@/lib/supabase/server";
 import type {
   AnalysisHorizon,
   HorizonKey,
+  IntelligenceSignal,
   ModulePerformance,
-  PerformanceLogInsert,
   SignalPerformance,
 } from "@/lib/intelligence/types";
+import { updateWeightsFromOutcome } from "@/lib/intelligence/learning";
+import { getSupabaseServerClient } from "@/lib/supabase/server";
 
-interface PerformanceLogRow {
-  id: string;
-  module_name: HorizonKey;
-  horizon: AnalysisHorizon;
-  return_pct: number | null;
-  profitable: boolean | null;
-  closed_at: string | null;
-  created_at: string;
-  triggered_signals: string[] | null;
+interface LogSignalInput {
+  symbol: string;
+  sector?: string | null;
+  horizon: HorizonKey;
+  rating: string;
+  strategy?: string;
+  confidence: string;
+  risk: string;
+  score: number;
+  entryPrice: number | null;
+  targetPrice?: number | null;
+  stopPrice?: number | null;
+  factorWeights: Record<string, number>;
+  factorBreakdown: Record<string, number>;
+  reason: string;
+  modelVersion?: string;
 }
 
+const EVALUATION_WINDOWS: Record<HorizonKey, { tradingDays?: number; calendarDays?: number }> = {
+  swing: { tradingDays: 5 },
+  threeMonth: { calendarDays: 30 },
+  sixMonth: { calendarDays: 90 },
+  oneYear: { calendarDays: 180 },
+};
+
 function toPercent(value: number): number {
-  return Number((value * 100).toFixed(1));
+  return Number((value * 100).toFixed(2));
+}
+
+function addTradingDays(start: Date, tradingDays: number): Date {
+  const result = new Date(start);
+  let added = 0;
+  while (added < tradingDays) {
+    result.setUTCDate(result.getUTCDate() + 1);
+    const day = result.getUTCDay();
+    if (day !== 0 && day !== 6) {
+      added += 1;
+    }
+  }
+  return result;
+}
+
+function isDueForEvaluation(signal: IntelligenceSignal, now = new Date()): boolean {
+  const createdAt = new Date(signal.created_at);
+  const window = EVALUATION_WINDOWS[signal.horizon];
+  if (!window) return false;
+
+  const dueAt = window.tradingDays
+    ? addTradingDays(createdAt, window.tradingDays)
+    : new Date(createdAt.getTime() + (window.calendarDays ?? 0) * 24 * 60 * 60 * 1000);
+
+  return now >= dueAt;
+}
+
+function resolveOutcomeStatus(outcomeReturn: number): string {
+  if (outcomeReturn > 0.01) return "success";
+  if (outcomeReturn < -0.01) return "fail";
+  return "flat";
 }
 
 function calcMaxDrawdown(returns: number[]): number {
@@ -29,61 +75,166 @@ function calcMaxDrawdown(returns: number[]): number {
 
   for (const item of returns) {
     equity += item;
-    if (equity > peak) {
-      peak = equity;
-    }
-
+    if (equity > peak) peak = equity;
     const drawdown = peak - equity;
-    if (drawdown > maxDrawdown) {
-      maxDrawdown = drawdown;
-    }
+    if (drawdown > maxDrawdown) maxDrawdown = drawdown;
   }
 
   return Number(maxDrawdown.toFixed(2));
 }
 
-export async function logSignalRun(input: PerformanceLogInsert): Promise<string | null> {
+export async function logSignal(signal: LogSignalInput): Promise<string | null> {
+  try {
+    const supabase = getSupabaseServerClient();
+    const { data, error } = await supabase
+      .from("intelligence_signals")
+      .insert({
+        symbol: signal.symbol,
+        sector: signal.sector ?? null,
+        horizon: signal.horizon,
+        rating: signal.rating,
+        strategy: signal.strategy ?? null,
+        confidence: signal.confidence,
+        risk: signal.risk,
+        score: signal.score,
+        entry_price: signal.entryPrice,
+        target_price: signal.targetPrice ?? null,
+        stop_price: signal.stopPrice ?? null,
+        factor_weights: signal.factorWeights,
+        factor_breakdown: signal.factorBreakdown,
+        reason: signal.reason,
+        model_version: signal.modelVersion ?? "v1",
+      })
+      .select("id")
+      .single();
+
+    if (error || !data) {
+      return null;
+    }
+
+    return data.id as string;
+  } catch {
+    return null;
+  }
+}
+
+export async function evaluateSignal(signalId: string, currentPrice: number): Promise<IntelligenceSignal | null> {
+  try {
+    const supabase = getSupabaseServerClient();
+    const { data, error } = await supabase
+      .from("intelligence_signals")
+      .select("*")
+      .eq("id", signalId)
+      .maybeSingle();
+
+    if (error || !data) return null;
+
+    const signal = data as IntelligenceSignal;
+    if (signal.entry_price == null || currentPrice <= 0) {
+      return null;
+    }
+
+    const outcomeReturn = (currentPrice - signal.entry_price) / signal.entry_price;
+    const outcomeStatus = resolveOutcomeStatus(outcomeReturn);
+
+    await supabase
+      .from("intelligence_signals")
+      .update({
+        evaluated_at: new Date().toISOString(),
+        outcome_return: toPercent(outcomeReturn),
+        outcome_status: outcomeStatus,
+      })
+      .eq("id", signal.id);
+
+    await updateWeightsFromOutcome(signal, {
+      outcomeReturn: toPercent(outcomeReturn),
+      status: outcomeStatus,
+    });
+
+    return {
+      ...signal,
+      evaluated_at: new Date().toISOString(),
+      outcome_return: toPercent(outcomeReturn),
+      outcome_status: outcomeStatus,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function evaluateDueSignals(priceMap: Record<string, number>): Promise<IntelligenceSignal[]> {
+  const supabase = getSupabaseServerClient();
+  const { data, error } = await supabase
+    .from("intelligence_signals")
+    .select("*")
+    .is("evaluated_at", null);
+
+  if (error || !data) {
+    return [];
+  }
+
+  const signals = data as IntelligenceSignal[];
+  const due = signals.filter((signal) => isDueForEvaluation(signal) && typeof priceMap[signal.symbol] === "number");
+
+  const outcomes = await Promise.all(
+    due.map((signal) => evaluateSignal(signal.id, Number(priceMap[signal.symbol])))
+  );
+
+  return outcomes.filter((signal): signal is IntelligenceSignal => signal !== null);
+}
+
+export async function getSignalHistory(symbol: string, horizon: AnalysisHorizon): Promise<IntelligenceSignal[]> {
   const supabase = getSupabaseServerClient();
 
   const { data, error } = await supabase
-    .from("performance_logs")
-    .insert({
-      symbol: input.symbol,
-      horizon: input.horizon,
-      module_name: input.moduleName,
-      recommendation: input.recommendation,
-      score: input.score,
-      triggered_signals: input.triggeredSignals,
-      market_context: input.marketContext,
-    })
-    .select("id")
-    .single();
+    .from("intelligence_signals")
+    .select("*")
+    .eq("symbol", symbol)
+    .eq("horizon", horizon)
+    .order("created_at", { ascending: false })
+    .limit(200);
 
   if (error || !data) {
-    return null;
+    return [];
   }
 
-  return data.id as string;
+  return data as IntelligenceSignal[];
 }
 
-export async function closePerformanceLog(input: {
-  id: string;
-  exitPrice: number;
-  returnPct: number;
-  holdDurationDays: number;
-}): Promise<void> {
+export async function getPerformanceSummary(filters?: {
+  symbol?: string;
+  sector?: string;
+  horizon?: AnalysisHorizon;
+}): Promise<{ sampleSize: number; winRate: number; avgReturn: number; success: number; failure: number }> {
   const supabase = getSupabaseServerClient();
+  let query = supabase
+    .from("intelligence_signals")
+    .select("outcome_return, outcome_status")
+    .not("evaluated_at", "is", null);
 
-  await supabase
-    .from("performance_logs")
-    .update({
-      exit_price: input.exitPrice,
-      return_pct: input.returnPct,
-      profitable: input.returnPct > 0,
-      hold_duration_days: input.holdDurationDays,
-      closed_at: new Date().toISOString(),
-    })
-    .eq("id", input.id);
+  if (filters?.symbol) query = query.eq("symbol", filters.symbol);
+  if (filters?.sector) query = query.eq("sector", filters.sector);
+  if (filters?.horizon) query = query.eq("horizon", filters.horizon);
+
+  const { data, error } = await query;
+  if (error || !data) {
+    return { sampleSize: 0, winRate: 0, avgReturn: 0, success: 0, failure: 0 };
+  }
+
+  const rows = data as Array<{ outcome_return: number | null; outcome_status: string | null }>;
+  const success = rows.filter((row) => row.outcome_status === "success").length;
+  const failure = rows.filter((row) => row.outcome_status === "fail").length;
+  const avgReturn =
+    rows.reduce((sum, row) => sum + (row.outcome_return ?? 0), 0) /
+    Math.max(1, rows.length);
+
+  return {
+    sampleSize: rows.length,
+    winRate: rows.length ? Number(((success / rows.length) * 100).toFixed(2)) : 0,
+    avgReturn: Number(avgReturn.toFixed(2)),
+    success,
+    failure,
+  };
 }
 
 export async function getModulePerformance(): Promise<ModulePerformance[]> {
@@ -91,73 +242,69 @@ export async function getModulePerformance(): Promise<ModulePerformance[]> {
   const last30Start = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
   const { data, error } = await supabase
-    .from("performance_logs")
-    .select("id, module_name, horizon, return_pct, profitable, closed_at, created_at")
-    .not("closed_at", "is", null);
+    .from("intelligence_signals")
+    .select("horizon, outcome_return, outcome_status, created_at")
+    .not("evaluated_at", "is", null);
 
   if (error || !data) {
     return [];
   }
 
-  const rows = data as PerformanceLogRow[];
-  const grouped = new Map<string, PerformanceLogRow[]>();
-
-  for (const row of rows) {
-    const key = `${row.module_name}::${row.horizon}`;
-    const existing = grouped.get(key) ?? [];
-    existing.push(row);
-    grouped.set(key, existing);
+  const grouped = new Map<HorizonKey, Array<{ outcome_return: number | null; outcome_status: string | null; created_at: string }>>();
+  for (const row of data as Array<{ horizon: HorizonKey; outcome_return: number | null; outcome_status: string | null; created_at: string }>) {
+    const current = grouped.get(row.horizon) ?? [];
+    current.push({
+      outcome_return: row.outcome_return,
+      outcome_status: row.outcome_status,
+      created_at: row.created_at,
+    });
+    grouped.set(row.horizon, current);
   }
 
-  return [...grouped.entries()].map(([key, group]) => {
-    const [moduleName, horizon] = key.split("::") as [HorizonKey, AnalysisHorizon];
-    const winners = group.filter((item) => item.profitable).length;
-    const winRate = group.length ? winners / group.length : 0;
-    const avgReturn =
-      group.reduce((sum, item) => sum + (item.return_pct ?? 0), 0) / Math.max(group.length, 1);
-    const recentTrades = group.filter((item) => item.created_at >= last30Start).length;
-    const returns = group
-      .map((item) => item.return_pct)
-      .filter((item): item is number => typeof item === "number");
-
-    return {
-      moduleName,
-      horizon,
-      winRate: toPercent(winRate),
-      avgReturn: Number(avgReturn.toFixed(2)),
-      last30Trades: recentTrades,
-      sampleSize: group.length,
-      maxDrawdown: calcMaxDrawdown(returns),
-    };
-  });
+  return (["swing", "threeMonth", "sixMonth", "oneYear"] as HorizonKey[])
+    .filter((h) => grouped.has(h))
+    .map((horizon) => {
+      const group = grouped.get(horizon) ?? [];
+      const wins = group.filter((item) => item.outcome_status === "success").length;
+      const avgReturn = group.reduce((sum, item) => sum + (item.outcome_return ?? 0), 0) / Math.max(1, group.length);
+      const returns = group.map((item) => item.outcome_return ?? 0);
+      return {
+        moduleName: horizon,
+        horizon,
+        winRate: group.length ? Number(((wins / group.length) * 100).toFixed(2)) : 0,
+        avgReturn: Number(avgReturn.toFixed(2)),
+        last30Trades: group.filter((item) => item.created_at >= last30Start).length,
+        sampleSize: group.length,
+        maxDrawdown: calcMaxDrawdown(returns),
+      };
+    });
 }
 
 export async function getBestSignals(limit = 8): Promise<SignalPerformance[]> {
   const supabase = getSupabaseServerClient();
 
   const { data, error } = await supabase
-    .from("performance_logs")
-    .select("triggered_signals, return_pct, profitable, closed_at")
-    .not("closed_at", "is", null);
+    .from("intelligence_signals")
+    .select("factor_breakdown, outcome_return, outcome_status")
+    .not("evaluated_at", "is", null);
 
   if (error || !data) {
     return [];
   }
 
-  const rows = data as PerformanceLogRow[];
   const stats = new Map<string, { wins: number; count: number; sumReturn: number }>();
-
-  for (const row of rows) {
-    if (!row.triggered_signals?.length) continue;
-
-    for (const signal of row.triggered_signals) {
-      const current = stats.get(signal) ?? { wins: 0, count: 0, sumReturn: 0 };
+  for (const row of data as Array<{
+    factor_breakdown: Record<string, number> | null;
+    outcome_return: number | null;
+    outcome_status: string | null;
+  }>) {
+    const factors = Object.keys(row.factor_breakdown ?? {});
+    for (const factor of factors) {
+      const current = stats.get(factor) ?? { wins: 0, count: 0, sumReturn: 0 };
       current.count += 1;
-      if (row.profitable) {
-        current.wins += 1;
-      }
-      current.sumReturn += row.return_pct ?? 0;
-      stats.set(signal, current);
+      if (row.outcome_status === "success") current.wins += 1;
+      current.sumReturn += row.outcome_return ?? 0;
+      stats.set(factor, current);
     }
   }
 
@@ -165,7 +312,7 @@ export async function getBestSignals(limit = 8): Promise<SignalPerformance[]> {
     .filter(([, item]) => item.count >= 5)
     .map(([signal, item]) => ({
       signal,
-      winRate: toPercent(item.wins / item.count),
+      winRate: Number(((item.wins / item.count) * 100).toFixed(2)),
       avgReturn: Number((item.sumReturn / item.count).toFixed(2)),
       sampleSize: item.count,
     }))
