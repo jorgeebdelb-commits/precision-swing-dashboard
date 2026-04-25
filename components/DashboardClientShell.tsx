@@ -1103,7 +1103,7 @@ export default function DashboardClientShell() {
                 selectedMetrics.momentumToday,
                 glowColor(selectedMetrics.momentumToday),
               ],
-              ["Swing Plan", selectedMetrics.swingStrategy, "#38bdf8"],
+              ["Action", selectedMetrics.strategy, "#38bdf8"],
             ].map((card) => (
               <div key={String(card[0])} style={statCardStyle()}>
                 <div style={{ fontSize: 12, color: "#94a3b8" }}>{card[0]}</div>
@@ -1133,7 +1133,7 @@ export default function DashboardClientShell() {
               {
                 label: "Swing",
                 score: selectedMetrics.swing,
-                signal: selectedMetrics.swingSignal,
+                signal: selectedMetrics.recommendation,
                 strategy: selectedMetrics.swingStrategy,
               },
               {
@@ -1221,6 +1221,7 @@ export default function DashboardClientShell() {
             >
               <b style={{ color: "#f8fafc" }}>Model Notes</b>
               <ul style={{ marginBottom: 0, color: "#cbd5e1" }}>
+                <li>{selectedMetrics.reason}</li>
                 {selectedMetrics.notes.map((note, idx) => (
                   <li key={idx}>{note}</li>
                 ))}
@@ -1278,7 +1279,7 @@ export default function DashboardClientShell() {
                   <div>
                     <div style={{ fontWeight: 800, color: "#f8fafc" }}>{item.symbol}</div>
                     <div style={{ fontSize: 12, color: "#94a3b8" }}>
-                      Swing {metrics.swingSignal} / {metrics.swingStrategy}
+                      {metrics.recommendation} / {metrics.strategy}
                     </div>
                   </div>
                   <div style={{ fontWeight: 800, color: "#22c55e" }}>
@@ -1475,7 +1476,7 @@ export default function DashboardClientShell() {
                   {metrics.swing.toFixed(1)}
                 </td>
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 800 }}>
-                  {metrics.swingSignal} / {metrics.swingStrategy}
+                  {metrics.recommendation} / {metrics.strategy}
                 </td>
 
                 <td
@@ -1529,7 +1530,7 @@ export default function DashboardClientShell() {
                 </td>
 
                 <td style={{ padding: 9, textAlign: "left", maxWidth: 260 }}>
-                  {metrics.why.join(" • ")}
+                  {metrics.reason}
                 </td>
 
                 <td style={{ padding: 9, textAlign: "center" }}>

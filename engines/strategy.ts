@@ -4,6 +4,11 @@ import type {
   MarketRegime,
   Strategy,
 } from "../types/dashboard";
+import {
+  evaluateRecommendation,
+  type ConfidenceLevel,
+  type RecommendationEngineInput,
+} from "../lib/intelligence/recommendationEngine";
 
 import { clamp, formatPrice, num } from "../app/lib/helpers";
 
@@ -71,6 +76,9 @@ export type RowMetrics = {
   sixMonth: number;
   oneYear: number;
   confidence: number;
+  recommendation: string;
+  strategy: Strategy;
+  reason: string;
   why: string[];
   swingSignal: string;
   threeMonthSignal: string;
@@ -146,11 +154,10 @@ const clamp10 = (value: number): number =>
 
 const scaleTo10 = (value: number): number => clamp10(clamp(value) / 10);
 
-const scoreLabel = (score: number): string => {
-  if (score >= 8.8) return "Strong Buy";
-  if (score >= 7.1) return "Buy";
-  if (score >= 5.5) return "Watch";
-  return "Avoid";
+const confidenceToScore = (confidence: ConfidenceLevel): number => {
+  if (confidence === "High") return 8.6;
+  if (confidence === "Medium") return 6.4;
+  return 4.3;
 };
 
 const symbolSeed = (symbol: string): number => {
@@ -495,49 +502,10 @@ function weightedHorizonScore(horizon: HorizonKey, pillars: PillarScores, profil
   );
 }
 
-function callsAllowed(
-  score: number,
-  technicals: TechnicalFactors
-): boolean {
-  return (
-    score >= 8 &&
-    technicals.atrPercent <= 7.5 &&
-    technicals.volatilityPercent <= 9 &&
-    technicals.trendAligned
-  );
-}
-
-export function getStrategy(
-  horizon: HorizonKey,
-  score: number,
-  riskLabel: RiskLabel,
-  technicals: TechnicalFactors
-): Strategy {
-  const allowCalls = callsAllowed(score, technicals) && riskLabel !== "High" && riskLabel !== "Extreme";
-
-  if (horizon === "swing") {
-    if (score >= 8.6 && allowCalls) return "Shares + Calls";
-    if (score >= 7) return "Shares Only";
-    if (score >= 5.6) return "Starter Size";
-    return "No Trade";
-  }
-
-  if (horizon === "threeMonth") {
-    if (score >= 8.4) return "Shares Only";
-    if (score >= 6.2) return "Starter Size";
-    if (score >= 5.4) return "Shares Only";
-    return "No Trade";
-  }
-
-  if (horizon === "sixMonth") {
-    if (score >= 8.2) return "Shares Only";
-    if (score >= 6.4) return "Starter Size";
-    return "No Trade";
-  }
-
-  if (score >= 8) return "Shares Only";
-  if (score >= 6.5) return "Starter Size";
-  return "No Trade";
+function toSentiment(bias: Item["bias"]): "Bullish" | "Neutral" | "Bearish" {
+  if (bias === "Bullish") return "Bullish";
+  if (bias === "Bearish") return "Bearish";
+  return "Neutral";
 }
 
 export function getMarketRegime(
@@ -596,7 +564,7 @@ export function computeTradePlan(
     positionSizing = "1%-3% tactical";
 
   const callPlan =
-    swingStrategy === "Shares + Calls"
+    swingStrategy === "Buy Shares + Calls" || swingStrategy === "Buy Calls"
       ? "Calls: 30-45 DTE ATM / slight ITM"
       : "Calls: only if trend + vol align";
 
@@ -646,57 +614,35 @@ function buildWhy(
   return reasons.slice(0, 3);
 }
 
-function computeConfidence(
-  horizons: number[],
-  item: Item,
-  technicals: TechnicalFactors,
-  riskLabel: RiskLabel
-): number {
-  const mean = horizons.reduce((sum, x) => sum + x, 0) / horizons.length;
-  const variance = horizons.reduce((sum, x) => sum + (x - mean) ** 2, 0) / horizons.length;
-  const spread = Math.sqrt(variance);
-  const spreadPenalty = spread * 1.15;
+function buildEngineInput(params: {
+  swingScore: number;
+  threeMonthScore: number;
+  sixMonthScore: number;
+  oneYearScore: number;
+  pillars: PillarScores;
+  item: Item;
+  riskLabel: RiskLabel;
+  technicals: TechnicalFactors;
+  momentum: number;
+}): RecommendationEngineInput {
+  const { swingScore, threeMonthScore, sixMonthScore, oneYearScore, pillars, item, riskLabel, technicals, momentum } =
+    params;
+  const volatilityComposite = clamp10((technicals.atrPercent * 0.45 + technicals.volatilityPercent * 0.55) / 1.8);
+  const whalesIntel = clamp10((pillars.intelligence * 0.68 + scaleTo10(num(item.whaleScore, 60)) * 0.32));
 
-  const qualitySignals = [
-    num(item.price) > 0,
-    item.support !== undefined,
-    item.resistance !== undefined,
-    item.rsi !== undefined,
-    item.volumeRatio !== undefined,
-    item.technicalScore !== undefined,
-    item.whaleScore !== undefined,
-    item.macroScore !== undefined,
-    item.politicalScore !== undefined,
-    item.atrPercent !== undefined,
-    item.priceVolatility !== undefined,
-    item.ivPercentile !== undefined,
-  ];
-  const criticalSignals = [
-    item.support !== undefined,
-    item.resistance !== undefined,
-    item.atrPercent !== undefined,
-    item.priceVolatility !== undefined,
-    item.betaProxy !== undefined,
-  ];
-
-  const completeness = qualitySignals.filter(Boolean).length / qualitySignals.length;
-  const missingPenalty = (1 - completeness) * 2.25;
-  const criticalMissingPenalty =
-    ((criticalSignals.length - criticalSignals.filter(Boolean).length) / criticalSignals.length) * 1.4;
-  const volatilityPenalty = clamp10((technicals.atrPercent * 0.42 + technicals.volatilityPercent * 0.33) / 2.6);
-  const riskPenalty = riskLabel === "Extreme" ? 0.6 : riskLabel === "High" ? 0.32 : 0;
-  const avgScore = mean;
-
-  return clamp10(
-    4.2 +
-      completeness * 4.1 +
-      Math.max(0, avgScore - 6.5) * 0.55 -
-      spreadPenalty -
-      volatilityPenalty * 0.42 -
-      riskPenalty -
-      missingPenalty -
-      criticalMissingPenalty
-  );
+  return {
+    swingScore,
+    threeMonthScore,
+    sixMonthScore,
+    oneYearScore,
+    technicalScore: pillars.technical,
+    fundamentalScore: pillars.fundamental,
+    sentiment: toSentiment(item.bias),
+    whalesIntel,
+    momentum,
+    volatility: volatilityComposite,
+    riskLevel: riskLabel,
+  };
 }
 
 function expandScoreRange(score: number, riskScore: number, profile: TickerProfile): number {
@@ -721,22 +667,41 @@ export function computeMetrics(item: Item): RowMetrics {
   const sixMonthExpanded = expandScoreRange(sixMonth, riskScore, profile);
   const oneYearExpanded = expandScoreRange(oneYear, riskScore, profile);
 
-  const swingSignal = scoreLabel(swingExpanded);
-  const threeMonthSignal = scoreLabel(threeMonthExpanded);
-  const sixMonthSignal = scoreLabel(sixMonthExpanded);
-  const oneYearSignal = scoreLabel(oneYearExpanded);
-
-  const swingStrategy = getStrategy("swing", swingExpanded, riskLabel, technicals);
-  const threeMonthStrategy = getStrategy("threeMonth", threeMonthExpanded, riskLabel, technicals);
-  const sixMonthStrategy = getStrategy("sixMonth", sixMonthExpanded, riskLabel, technicals);
-  const oneYearStrategy = getStrategy("oneYear", oneYearExpanded, riskLabel, technicals);
-
-  const confidence = computeConfidence(
-    [swingExpanded, threeMonthExpanded, sixMonthExpanded, oneYearExpanded],
-    item,
-    technicals,
-    riskLabel
+  const momentum = clamp10(
+    (pillars.technical * 0.5 +
+      pillars.intelligence * 0.35 +
+      (technicals.trendAligned ? 8.2 : 4.2) * 0.15)
   );
+
+  const baseInput = buildEngineInput({
+    swingScore: swingExpanded,
+    threeMonthScore: threeMonthExpanded,
+    sixMonthScore: sixMonthExpanded,
+    oneYearScore: oneYearExpanded,
+    pillars,
+    item,
+    riskLabel,
+    technicals,
+    momentum,
+  });
+
+  const finalDecision = evaluateRecommendation(baseInput);
+  const swingDecision = evaluateRecommendation({ ...baseInput, swingScore: swingExpanded });
+  const threeMonthDecision = evaluateRecommendation({ ...baseInput, swingScore: threeMonthExpanded });
+  const sixMonthDecision = evaluateRecommendation({ ...baseInput, swingScore: sixMonthExpanded });
+  const oneYearDecision = evaluateRecommendation({ ...baseInput, swingScore: oneYearExpanded });
+
+  const swingSignal = swingDecision.rating;
+  const threeMonthSignal = threeMonthDecision.rating;
+  const sixMonthSignal = sixMonthDecision.rating;
+  const oneYearSignal = oneYearDecision.rating;
+
+  const swingStrategy = swingDecision.strategy;
+  const threeMonthStrategy = threeMonthDecision.strategy;
+  const sixMonthStrategy = sixMonthDecision.strategy;
+  const oneYearStrategy = oneYearDecision.strategy;
+
+  const confidence = confidenceToScore(finalDecision.confidence);
 
   const whaleV2 = Math.round(
     clamp(
@@ -765,7 +730,7 @@ export function computeMetrics(item: Item): RowMetrics {
   const hotSetup =
     num(item.price) > 0 &&
     swingExpanded >= 7.7 &&
-    confidence >= 6.8 &&
+    finalDecision.confidence !== "Low" &&
     (riskLabel === "Low" || riskLabel === "Medium");
 
   const redFlag =
@@ -777,12 +742,11 @@ export function computeMetrics(item: Item): RowMetrics {
   const why = buildWhy(item, pillars, technicals, riskLabel, profile);
   const marketRegime = getMarketRegime(pillars);
 
-  const notes: string[] = [...why];
+  const notes: string[] = [finalDecision.reason, ...why];
   if (hotSetup) notes.push("Multi-horizon alignment");
   if (riskLabel === "Extreme") notes.push("Extreme risk profile");
   if (num(item.price) <= 0) notes.push("Missing live quote, refresh all");
-  const confidenceLabel: "Low" | "Medium" | "High" =
-    confidence >= 7.4 ? "High" : confidence >= 5.8 ? "Medium" : "Low";
+  const confidenceLabel: "Low" | "Medium" | "High" = finalDecision.confidence;
 
   return {
     whaleV2,
@@ -797,6 +761,9 @@ export function computeMetrics(item: Item): RowMetrics {
     sixMonth: sixMonthExpanded,
     oneYear: oneYearExpanded,
     confidence,
+    recommendation: finalDecision.rating,
+    strategy: finalDecision.strategy,
+    reason: finalDecision.reason,
     why,
     swingSignal,
     threeMonthSignal,
