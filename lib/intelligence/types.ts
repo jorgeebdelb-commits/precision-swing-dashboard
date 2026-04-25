@@ -1,26 +1,18 @@
-export type HorizonKey = "shortTerm" | "fundamental3m" | "fundamental6m" | "fundamental1y";
+export type HorizonKey = "swing" | "threeMonth" | "sixMonth" | "oneYear";
 
-export type AnalysisHorizon = "Short-Term" | "3-Month" | "6-Month" | "1-Year+";
+export type AnalysisHorizon = HorizonKey;
 
-export type Recommendation = "Buy" | "Watch" | "Sell";
-
-export interface AnalysisResult {
-  symbol: string;
-  horizon: AnalysisHorizon;
-  recommendation: Recommendation;
-  score: number;
-  confidence: number;
-  reasoning: string[];
-  triggeredSignals: string[];
-  updatedAt: string;
-}
-
-export interface SignalContext {
-  signal: string;
-  value: number;
-  weight: number;
-  note: string;
-}
+export type ConfidenceLevel = "High" | "Medium" | "Low";
+export type RiskLevel = "Low" | "Medium" | "High" | "Extreme";
+export type RatingLabel = "Strong Buy" | "Buy" | "Watch" | "Avoid";
+export type StrategyRecommendation =
+  | "Buy Shares"
+  | "Buy Shares + Calls"
+  | "Buy Calls"
+  | "Starter Size Only"
+  | "Watch"
+  | "Avoid"
+  | "Buy Puts";
 
 export interface MarketContextSnapshot {
   price: number;
@@ -34,26 +26,45 @@ export interface MarketContextSnapshot {
   flowScore: number;
   volatility: number;
   trendSlope: number;
+  sector?: string;
 }
 
-export interface SymbolContext {
+export interface FactorWeight {
+  factor: string;
+  weight: number;
+}
+
+export interface AdaptiveWeight {
+  signal: string;
+  weight: number;
+}
+
+export interface AnalysisResult {
   symbol: string;
-  market: MarketContextSnapshot;
+  horizon: AnalysisHorizon;
+  score: number;
+  rating: RatingLabel;
+  strategy: StrategyRecommendation;
+  confidence: ConfidenceLevel;
+  risk: RiskLevel;
+  reason: string;
+  factorWeights: FactorWeight[];
+  factorBreakdown: Record<string, number>;
 }
 
 export interface PipelineInput {
   symbol: string;
-  context: SymbolContext;
-  nowIso: string;
+  horizon: AnalysisHorizon;
+  marketContext: MarketContextSnapshot;
 }
 
-export type PipelineFn = (input: PipelineInput) => Promise<AnalysisResult>;
+export type PipelineFn = (input: PipelineInput) => AnalysisResult;
 
 export interface PerformanceLogInsert {
   symbol: string;
   horizon: AnalysisHorizon;
   moduleName: HorizonKey;
-  recommendation: Recommendation;
+  recommendation: string;
   score: number;
   triggeredSignals: string[];
   marketContext: MarketContextSnapshot;
@@ -74,11 +85,6 @@ export interface SignalPerformance {
   winRate: number;
   avgReturn: number;
   sampleSize: number;
-}
-
-export interface AdaptiveWeight {
-  signal: string;
-  weight: number;
 }
 
 export interface IntelligenceSymbolSummary {

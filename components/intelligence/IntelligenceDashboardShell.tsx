@@ -12,17 +12,17 @@ interface IntelligenceDashboardShellProps {
   initialData: IntelligenceApiResponse;
 }
 
-function recommendationColor(recommendation: AnalysisResult["recommendation"]): string {
-  if (recommendation === "Buy") return "#22c55e";
+function recommendationColor(recommendation: AnalysisResult["rating"]): string {
+  if (recommendation === "Strong Buy" || recommendation === "Buy") return "#22c55e";
   if (recommendation === "Watch") return "#f59e0b";
   return "#ef4444";
 }
 
 function moduleLabel(moduleName: ModulePerformance["moduleName"]): string {
-  if (moduleName === "shortTerm") return "Short-Term";
-  if (moduleName === "fundamental3m") return "3-Month";
-  if (moduleName === "fundamental6m") return "6-Month";
-  return "1-Year+";
+  if (moduleName === "swing") return "Swing";
+  if (moduleName === "threeMonth") return "3-Month";
+  if (moduleName === "sixMonth") return "6-Month";
+  return "1-Year";
 }
 
 function emptySignalState(): SignalPerformance[] {
@@ -74,7 +74,7 @@ export default function IntelligenceDashboardShell({
                 <thead>
                   <tr style={{ color: "#94a3b8", textAlign: "left", fontSize: 13 }}>
                     <th style={{ padding: "8px 6px" }}>Horizon</th>
-                    <th style={{ padding: "8px 6px" }}>Recommendation</th>
+                    <th style={{ padding: "8px 6px" }}>Rating</th>
                     <th style={{ padding: "8px 6px" }}>Score</th>
                     <th style={{ padding: "8px 6px" }}>Confidence</th>
                     <th style={{ padding: "8px 6px" }}>Reason</th>
@@ -84,12 +84,12 @@ export default function IntelligenceDashboardShell({
                   {summary.analyses.map((analysis) => (
                     <tr key={`${summary.symbol}-${analysis.horizon}`} style={{ borderTop: "1px solid #1e293b" }}>
                       <td style={{ padding: "8px 6px" }}>{analysis.horizon}</td>
-                      <td style={{ padding: "8px 6px", color: recommendationColor(analysis.recommendation) }}>
-                        {analysis.recommendation}
+                      <td style={{ padding: "8px 6px", color: recommendationColor(analysis.rating) }}>
+                        {analysis.rating}
                       </td>
                       <td style={{ padding: "8px 6px" }}>{analysis.score.toFixed(2)}</td>
-                      <td style={{ padding: "8px 6px" }}>{analysis.confidence.toFixed(1)}%</td>
-                      <td style={{ padding: "8px 6px", color: "#cbd5e1" }}>{analysis.reasoning[0] ?? "-"}</td>
+                      <td style={{ padding: "8px 6px" }}>{analysis.confidence}</td>
+                      <td style={{ padding: "8px 6px", color: "#cbd5e1" }}>{analysis.reason ?? "-"}</td>
                     </tr>
                   ))}
                 </tbody>

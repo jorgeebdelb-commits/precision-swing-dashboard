@@ -1,68 +1,39 @@
-import type { AnalysisResult, HorizonKey, PipelineInput } from "@/lib/intelligence/types";
-import { shortTermPipeline } from "@/lib/intelligence/pipelines/shortTerm";
+import type { AnalysisResult, HorizonKey, MarketContextSnapshot } from "@/lib/intelligence/types";
+import { swingPipeline } from "@/lib/intelligence/pipelines/swing";
 import { fundamental3mPipeline } from "@/lib/intelligence/pipelines/fundamental3m";
 import { fundamental6mPipeline } from "@/lib/intelligence/pipelines/fundamental6m";
 import { fundamental1yPipeline } from "@/lib/intelligence/pipelines/fundamental1y";
 
-const pipelineMap: Record<HorizonKey, (input: PipelineInput) => Promise<AnalysisResult>> = {
-  shortTerm: shortTermPipeline,
-  fundamental3m: fundamental3mPipeline,
-  fundamental6m: fundamental6mPipeline,
-  fundamental1y: fundamental1yPipeline,
-};
+const ROUTE_MAP = {
+  swing: swingPipeline,
+  threeMonth: fundamental3mPipeline,
+  sixMonth: fundamental6mPipeline,
+  oneYear: fundamental1yPipeline,
+} as const;
 
-function normalizeHorizon(horizon?: string | null): HorizonKey | "all" {
-  if (!horizon) return "all";
+function normalizeHorizon(horizon: string | HorizonKey | null | undefined): HorizonKey {
+  if (!horizon) return "swing";
+  if (horizon === "swing" || horizon === "threeMonth" || horizon === "sixMonth" || horizon === "oneYear") {
+    return horizon;
+  }
 
   const value = horizon.toLowerCase().trim();
-
-  if (
-    value.includes("under") ||
-    value.includes("short") ||
-    value.includes("swing") ||
-    value.includes("1m") ||
-    value.includes("2m")
-  ) {
-    return "shortTerm";
-  }
-
-  if (value === "3m" || value.includes("3 month") || value.includes("three month")) {
-    return "fundamental3m";
-  }
-
-  if (value === "6m" || value.includes("6 month") || value.includes("six month")) {
-    return "fundamental6m";
-  }
-
-  if (
-    value === "1y" ||
-    value.includes("1 year") ||
-    value.includes("12 month") ||
-    value.includes("year+")
-  ) {
-    return "fundamental1y";
-  }
-
-  return "all";
+  if (value.includes("three") || value === "3m" || value.includes("3 month")) return "threeMonth";
+  if (value.includes("six") || value === "6m" || value.includes("6 month")) return "sixMonth";
+  if (value.includes("year") || value === "1y" || value.includes("12 month")) return "oneYear";
+  return "swing";
 }
 
-export async function routeAnalysis(
+export function routeAnalysis(
   symbol: string,
-  horizon: string | null | undefined,
-  input: Omit<PipelineInput, "symbol">
-): Promise<Array<{ moduleName: HorizonKey; result: AnalysisResult }>> {
-  const selected = normalizeHorizon(horizon);
-  const runList: HorizonKey[] =
-    selected === "all"
-      ? ["shortTerm", "fundamental3m", "fundamental6m", "fundamental1y"]
-      : [selected];
+  horizon: string | HorizonKey | null | undefined,
+  marketContext: MarketContextSnapshot
+): AnalysisResult {
+  const resolvedHorizon = normalizeHorizon(horizon);
+  return ROUTE_MAP[resolvedHorizon]({ symbol, horizon: resolvedHorizon, marketContext });
+}
 
-  const runs = await Promise.all(
-    runList.map(async (moduleName) => {
-      const result = await pipelineMap[moduleName]({ ...input, symbol });
-      return { moduleName, result };
-    })
-  );
-
-  return runs;
+export function routeAllHorizons(symbol: string, marketContext: MarketContextSnapshot): AnalysisResult[] {
+  const order: HorizonKey[] = ["swing", "threeMonth", "sixMonth", "oneYear"];
+  return order.map((horizon) => routeAnalysis(symbol, horizon, marketContext));
 }
