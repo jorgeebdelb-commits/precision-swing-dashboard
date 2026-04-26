@@ -8,6 +8,7 @@ import {
   type ConfidenceLevel,
   type RecommendationEngineInput,
 } from "../lib/intelligence/recommendationEngine";
+import { routeExecutionStrategy } from "@/lib/execution/router";
 
 import { clamp, formatPrice, num } from "../app/lib/helpers";
 
@@ -745,6 +746,33 @@ export function computeMetrics(item: Item): RowMetrics {
   );
 
   const tradePlan = computeTradePlan(item, swingExpanded, riskLabel, swingStrategy);
+  const executionPlan = routeExecutionStrategy({
+    symbol: item.symbol,
+    price: num(item.price),
+    sector: profile.sector,
+    selectedHorizonScores: {
+      swing: swingExpanded,
+      threeMonth: threeMonthExpanded,
+      sixMonth: sixMonthExpanded,
+      oneYear: oneYearExpanded,
+    },
+    technicalScore: pillars.technical,
+    fundamentalScore: pillars.fundamental,
+    sentimentScore: pillars.intelligence,
+    environmentScore: pillars.environment,
+    momentum,
+    volatilityRisk: riskScore / 10,
+    confidence: finalDecision.confidence,
+    support: num(item.support),
+    resistance: num(item.resistance),
+    entryZone: tradePlan.entryZone,
+    stopLoss: tradePlan.stopLoss,
+    targetPrices: [tradePlan.target1, tradePlan.target2],
+    catalystContext: item.notes?.join(" | ") ?? undefined,
+    hasVolumeConfirmation: num(item.volumeRatio, 1) >= 1.1,
+    belowVWAP: num(item.price) < num(item.lr50, num(item.price)),
+    eventRiskHigh: false,
+  });
 
   const hotSetup =
     num(item.price) > 0 &&
@@ -781,8 +809,8 @@ export function computeMetrics(item: Item): RowMetrics {
     oneYear: oneYearExpanded,
     confidence,
     recommendation: finalDecision.rating,
-    strategy: finalDecision.strategy,
-    reason: finalDecision.reason,
+    strategy: executionPlan.finalStrategy,
+    reason: executionPlan.reason,
     why,
     swingSignal,
     threeMonthSignal,
@@ -800,9 +828,9 @@ export function computeMetrics(item: Item): RowMetrics {
     target1: tradePlan.target1,
     target2: tradePlan.target2,
     positionSizing: tradePlan.positionSizing,
-    callPlan: tradePlan.callPlan,
-    putPlan: tradePlan.putPlan,
-    notes,
+    callPlan: executionPlan.callsPlan.suggestedAction,
+    putPlan: executionPlan.putsPlan.suggestedAction,
+    notes: [...notes, ...executionPlan.sequencing],
     momentumToday: Math.round(clamp((pillars.technical * 0.6 + pillars.intelligence * 0.4) * 10)),
     redFlag,
     hotSetup,

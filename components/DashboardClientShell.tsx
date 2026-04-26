@@ -193,7 +193,14 @@ const HORIZON_FIELD_MAP: Record<HorizonKey, keyof Pick<Item, "swingScore" | "thr
 
 function strategyToBias(strategy: Strategy): Item["bias"] {
   if (strategy === "Avoid" || strategy === "Buy Puts") return "Bearish";
-  if (strategy === "Buy Shares" || strategy === "Buy Shares + Calls" || strategy === "Buy Calls") return "Bullish";
+  if (
+    strategy === "Buy Shares" ||
+    strategy === "Buy Shares + Calls" ||
+    strategy === "Buy Calls" ||
+    strategy === "Starter Shares, Add Calls on Breakout"
+  ) {
+    return "Bullish";
+  }
   return "Watch";
 }
 
@@ -738,7 +745,11 @@ export default function DashboardClientShell() {
               updates[key] = Number(analysis.score.toFixed(2));
             }
 
-            return { ...row, ...updates, bias: strategyToBias(summary.analyses[0]?.strategy ?? "Watch") };
+            return {
+              ...row,
+              ...updates,
+              bias: strategyToBias((summary.executionStrategy as Strategy) ?? summary.analyses[0]?.strategy ?? "Watch"),
+            };
           }))
         );
         latestItemsRef.current = nextItems;
