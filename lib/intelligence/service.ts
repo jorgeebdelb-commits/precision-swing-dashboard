@@ -1,5 +1,7 @@
 import { routeAllHorizons, routeAnalysis } from "@/lib/intelligence/router";
 import { getBestSignals, getModulePerformance, logSignal } from "@/lib/intelligence/performance";
+import { routeExecutionStrategy } from "@/lib/execution/router";
+import { logExecutionSignal } from "@/lib/execution/performance";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import type { AnalysisHorizon, IntelligenceApiResponse, IntelligenceSymbolSummary, MarketContextSnapshot } from "@/lib/intelligence/types";
 
@@ -52,6 +54,12 @@ function toScore10(value: number): number {
 function resolveBestHorizon(analyses: IntelligenceSymbolSummary["analyses"]): AnalysisHorizon {
   const top = [...analyses].sort((a, b) => b.score - a.score)[0];
   return top?.horizon ?? "swing";
+}
+
+function firstNumber(value: string | undefined): number | null {
+  if (!value) return null;
+  const match = value.match(/-?\\d+(\\.\\d+)?/);
+  return match ? Number(match[0]) : null;
 }
 
 const SYMBOL_SECTOR_FALLBACK: Record<string, string> = {
@@ -228,6 +236,7 @@ export async function getIntelligence(
 
   const marketContext = await buildMarketContext(symbols);
   const nowIso = new Date().toISOString();
+  const refreshSession = nowIso;
 
   const items = await Promise.all(
     symbols.map(async (symbol) => {
@@ -268,13 +277,84 @@ export async function getIntelligence(
             modelVersion: "v1",
           });
         }
+
+        const scoreMap = analyses.reduce<Partial<Record<"swing" | "threeMonth" | "sixMonth" | "oneYear", number>>>(
+          (acc, analysis) => {
+            acc[analysis.horizon] = analysis.score;
+            return acc;
+          },
+          {}
+        );
+        const bestAnalysis = [...analyses].sort((a, b) => b.score - a.score)[0];
+        const executionPlan = routeExecutionStrategy({
+          symbol,
+          price: context.price,
+          sector: context.sector,
+          selectedHorizonScores: scoreMap,
+          swingOutput: analyses.find((a) => a.horizon === "swing"),
+          threeMonthOutput: analyses.find((a) => a.horizon === "threeMonth"),
+          sixMonthOutput: analyses.find((a) => a.horizon === "sixMonth"),
+          oneYearOutput: analyses.find((a) => a.horizon === "oneYear"),
+          technicalScore: context.technicalScore,
+          fundamentalScore: Number(((scoreMap.threeMonth ?? 5) * 0.35 + (scoreMap.sixMonth ?? 5) * 0.3 + (scoreMap.oneYear ?? 5) * 0.35).toFixed(2)),
+          sentimentScore: context.newsSentiment,
+          environmentScore: Number(((context.macroScore + context.politicalScore) / 2).toFixed(2)),
+          momentum: Number((((scoreMap.swing ?? 5) * 0.5 + context.flowScore * 0.5)).toFixed(2)),
+          volatilityRisk: Math.max(1, Math.min(10, context.volatility * 3)),
+          confidence: bestAnalysis?.confidence ?? "Medium",
+          support: context.price * 0.97,
+          resistance: context.price * 1.03,
+          entryZone: `${(context.price * 0.995).toFixed(2)}-${(context.price * 1.005).toFixed(2)}`,
+          stopLoss: `${(context.price * 0.965).toFixed(2)}`,
+          targetPrices: [`${(context.price * 1.04).toFixed(2)}`, `${(context.price * 1.08).toFixed(2)}`],
+          catalystContext: bestAnalysis?.reason,
+          hasVolumeConfirmation: context.volumeRatio >= 1.05,
+          belowVWAP: context.price < context.price * (1 + context.trendSlope),
+          eventRiskHigh: context.earningsDays != null && context.earningsDays <= 5,
+        });
+
+        await logExecutionSignal({
+          symbol,
+          sector: context.sector ?? null,
+          horizon: bestAnalysis?.horizon ?? "swing",
+          finalStrategy: executionPlan.finalStrategy,
+          sharesScore: executionPlan.sharesPlan.score,
+          callsScore: executionPlan.callsPlan.score,
+          putsScore: executionPlan.putsPlan.score,
+          sharesAction: executionPlan.sharesPlan.suggestedAction,
+          callsAction: executionPlan.callsPlan.suggestedAction,
+          putsAction: executionPlan.putsPlan.suggestedAction,
+          selectedVehicle: executionPlan.selectedVehicle,
+          entryPrice: context.price || null,
+          stopPrice: firstNumber(executionPlan.sharesPlan.stopPlan),
+          targetPrice: firstNumber(executionPlan.callsPlan.entryTrigger) ?? firstNumber(executionPlan.putsPlan.breakdownTrigger),
+          confidence: executionPlan.confidence,
+          risk: executionPlan.risk,
+          reason: executionPlan.reason,
+          modelVersion: "execution_v1",
+          refreshSession,
+        });
       }
-      return {
+      const summary: IntelligenceSymbolSummary = {
         symbol,
         analyses,
+        executionStrategy: forceRefresh ? routeExecutionStrategy({
+          symbol,
+          price: context.price,
+          sector: context.sector,
+          selectedHorizonScores: analyses.reduce((acc, a) => ({ ...acc, [a.horizon]: a.score }), {}),
+          technicalScore: context.technicalScore,
+          fundamentalScore: analyses.reduce((sum, a) => sum + a.score, 0) / Math.max(1, analyses.length),
+          sentimentScore: context.newsSentiment,
+          environmentScore: (context.macroScore + context.politicalScore) / 2,
+          momentum: context.flowScore,
+          volatilityRisk: Math.max(1, Math.min(10, context.volatility * 3)),
+          confidence: analyses[0]?.confidence ?? "Medium",
+        }).finalStrategy : undefined,
         bestHorizon: resolveBestHorizon(analyses),
         updatedAt: nowIso,
-      } satisfies IntelligenceSymbolSummary;
+      };
+      return summary;
     })
   );
 

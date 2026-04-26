@@ -7,6 +7,8 @@ export type RiskLevel = "Low" | "Medium" | "High" | "Extreme";
 export type RatingLabel = "Strong Buy" | "Buy" | "Watch" | "Avoid";
 export type StrategyRecommendation =
   | "Buy Shares"
+  | "Starter Shares, Add Calls on Breakout"
+  | "Shares + Protective Put"
   | "Buy Shares + Calls"
   | "Buy Calls"
   | "Starter Size Only"
@@ -103,6 +105,7 @@ export interface SignalPerformance {
 export interface IntelligenceSymbolSummary {
   symbol: string;
   analyses: AnalysisResult[];
+  executionStrategy?: string;
   bestHorizon: AnalysisHorizon;
   updatedAt: string;
 }
