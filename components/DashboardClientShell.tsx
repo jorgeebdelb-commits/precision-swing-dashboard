@@ -7,7 +7,6 @@ import type {
   Strategy,
   QuoteResponse,
   SentimentResponse,
-  SortKey,
 } from "@/types/dashboard";
 import { computeMetrics, type RowMetrics } from "@/engines/strategy";
 import { supabase } from "@/app/lib/supabase";
@@ -197,7 +196,8 @@ function strategyToBias(strategy: Strategy): Item["bias"] {
     strategy === "Buy Shares" ||
     strategy === "Buy Shares + Calls" ||
     strategy === "Buy Calls" ||
-    strategy === "Starter Shares, Add Calls on Breakout"
+    strategy === "Starter Shares" ||
+    strategy === "Starter Shares + Calls on Breakout"
   ) {
     return "Bullish";
   }
@@ -230,8 +230,6 @@ export default function DashboardClientShell() {
 
   const [history, setHistory] = useState<{ time: string; price: number }[]>([]);
   const [chartRange, setChartRange] = useState<ChartRange>("1D");
-  const [sortKey, setSortKey] = useState<SortKey>("swing");
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const latestItemsRef = useRef<Item[]>([]);
 
   useEffect(() => {
@@ -385,18 +383,6 @@ export default function DashboardClientShell() {
     };
   }, [chartRange, chartSeries, selectedItem, selectedMetrics]);
 
-  const redRows = useMemo(() => rows.filter((x) => x.metrics.redFlag), [rows]);
-  const unknownRiskRows = useMemo(
-    () =>
-      rows.filter(
-        (x) =>
-          x.item.atrPercent === undefined ||
-          x.item.priceVolatility === undefined ||
-          x.item.betaProxy === undefined
-      ),
-    [rows]
-  );
-
   const topThree = useMemo(
     () =>
       [...rows]
@@ -406,65 +392,32 @@ export default function DashboardClientShell() {
     [rows]
   );
 
-  const avgSwing = useMemo(() => {
-    if (!rows.length) return 0;
-    return Math.round(
-      rows.reduce((sum, row) => sum + row.metrics.swing, 0) / rows.length
-    );
-  }, [rows]);
+  const sortedRows = useMemo(
+    () => [...rows].sort((a, b) => b.metrics.swing - a.metrics.swing),
+    [rows]
+  );
 
-  const avgConfidence = useMemo(() => {
-    if (!rows.length) return 0;
-    return Math.round(
-      rows.reduce((sum, row) => sum + row.metrics.confidence, 0) /
-        rows.length
-    );
-  }, [rows]);
+  const confidenceGroups = useMemo(
+    () => ({
+      High: sortedRows.filter((row) => row.metrics.confidenceLabel === "High"),
+      Medium: sortedRows.filter((row) => row.metrics.confidenceLabel === "Medium"),
+      Low: sortedRows.filter((row) => row.metrics.confidenceLabel === "Low"),
+    }),
+    [sortedRows]
+  );
 
-  const sortedRows = useMemo(() => {
-    const copy = [...rows];
-
-    const getValue = (row: RowData) => {
-      if (sortKey === "symbol") return row.item.symbol;
-      if (sortKey === "price") return row.item.price;
-      if (sortKey === "technical") return row.metrics.technical;
-      if (sortKey === "fundamental") return row.metrics.fundamental;
-      if (sortKey === "intelligence") return row.metrics.intelligence;
-      if (sortKey === "environment") return row.metrics.environment;
-      if (sortKey === "swing") return row.metrics.swing;
-      if (sortKey === "threeMonth") return row.metrics.threeMonth;
-      if (sortKey === "sixMonth") return row.metrics.sixMonth;
-      if (sortKey === "oneYear") return row.metrics.oneYear;
-      if (sortKey === "riskScore") return row.metrics.riskScore;
-      if (sortKey === "confidence") return row.metrics.confidence;
-      return row.metrics.swing;
-    };
-
-    copy.sort((a, b) => {
-      const av = getValue(a);
-      const bv = getValue(b);
-
-      if (typeof av === "string" && typeof bv === "string") {
-        return sortDirection === "asc"
-          ? av.localeCompare(bv)
-          : bv.localeCompare(av);
-      }
-
-      return sortDirection === "asc" ? num(av) - num(bv) : num(bv) - num(av);
+  const movementAlerts = useMemo(() => {
+    return sortedRows.slice(0, 5).map(({ item, metrics }, index) => {
+      const confidenceText =
+        metrics.confidenceLabel === "High"
+          ? "upgraded to High Confidence"
+          : metrics.confidenceLabel === "Medium"
+          ? "moved to Medium Confidence"
+          : "moved to Low Confidence";
+      if (index < 3) return `${item.symbol} entered Spotlight Top ${index + 1}`;
+      return `${item.symbol} ${confidenceText}`;
     });
-
-    return copy;
-  }, [rows, sortDirection, sortKey]);
-
-  const handleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
-      return;
-    }
-
-    setSortKey(key);
-    setSortDirection(key === "symbol" ? "asc" : "desc");
-  };
+  }, [sortedRows]);
 
   const handleLogin = () => {
     if (!sitePassword) {
@@ -781,23 +734,6 @@ export default function DashboardClientShell() {
     }
   };
 
-  const renderSortButton = (label: string, key: SortKey) => (
-    <button
-      onClick={() => handleSort(key)}
-      style={{
-        border: "none",
-        background: "transparent",
-        fontWeight: 800,
-        color: "#cbd5e1",
-        cursor: "pointer",
-        padding: 0,
-      }}
-    >
-      {label}
-      {sortKey === key ? (sortDirection === "asc" ? " ↑" : " ↓") : ""}
-    </button>
-  );
-
   if (!authenticated) {
     return (
       <div
@@ -1020,43 +956,6 @@ export default function DashboardClientShell() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(4, minmax(180px, 1fr))",
-          gap: 14,
-          marginBottom: 18,
-        }}
-      >
-        <div style={{ ...panelStyle(), padding: 16 }}>
-          <div style={{ fontSize: 12, color: "#94a3b8" }}>Red Flags</div>
-          <div style={{ fontSize: 30, fontWeight: 900, color: "#ef4444" }}>
-            {redRows.length}
-          </div>
-        </div>
-
-        <div style={{ ...panelStyle(), padding: 16 }}>
-          <div style={{ fontSize: 12, color: "#94a3b8" }}>Unknown Risk</div>
-          <div style={{ fontSize: 30, fontWeight: 900, color: "#94a3b8" }}>
-            {unknownRiskRows.length}
-          </div>
-        </div>
-
-        <div style={{ ...panelStyle(), padding: 16 }}>
-          <div style={{ fontSize: 12, color: "#94a3b8" }}>Avg Swing</div>
-          <div style={{ fontSize: 30, fontWeight: 900, color: "#f8fafc" }}>
-            {avgSwing}
-          </div>
-        </div>
-
-        <div style={{ ...panelStyle(), padding: 16 }}>
-          <div style={{ fontSize: 12, color: "#94a3b8" }}>Avg Confidence</div>
-          <div style={{ fontSize: 30, fontWeight: 900, color: "#38bdf8" }}>
-            {avgConfidence}
-          </div>
-        </div>
-      </div>
-
-      <div
-        style={{
-          display: "grid",
           gridTemplateColumns: "repeat(3, minmax(240px, 1fr))",
           gap: 14,
           marginBottom: 18,
@@ -1108,7 +1007,7 @@ export default function DashboardClientShell() {
                 {metrics.swingSignal}
               </div>
               <div style={{ marginTop: 8, fontSize: 13, color: "#cbd5e1" }}>
-                Swing {metrics.swingSignal} / {metrics.swingStrategy} • Entry {metrics.entryZone}
+                {metrics.swingStrategy} • Entry {metrics.entryZone}
               </div>
             </div>
           )
@@ -1338,13 +1237,14 @@ export default function DashboardClientShell() {
             style={{
               marginTop: 16,
               display: "grid",
-              gridTemplateColumns: "repeat(6, minmax(120px, 1fr))",
+              gridTemplateColumns: "repeat(7, minmax(120px, 1fr))",
               gap: 12,
             }}
           >
             {[
               ["Price", `$${selectedItem.price.toFixed(2)}`, "#f8fafc"],
-              ["Risk", selectedMetrics.riskLabel, riskColor(selectedMetrics.riskLabel)],
+              ["Risk Label", selectedMetrics.riskLabel, riskColor(selectedMetrics.riskLabel)],
+              ["Risk Score", `${selectedMetrics.riskScore}`, "#f8fafc"],
               [
                 "Confidence",
                 selectedMetrics.confidenceLabel,
@@ -1439,55 +1339,38 @@ export default function DashboardClientShell() {
             ))}
           </div>
 
-          <div
-            style={{
-              marginTop: 18,
-              display: "grid",
-              gridTemplateColumns: "repeat(2, minmax(220px, 1fr))",
-              gap: 12,
-            }}
-          >
-            <div style={{ ...panelStyle(), padding: 16 }}>
-              <h4 style={{ marginTop: 0, color: "#f8fafc" }}>Trade Plan</h4>
-              <p><b>Entry Zone:</b> {selectedMetrics.entryZone}</p>
-              <p><b>Stop Loss:</b> {selectedMetrics.stopLoss}</p>
-              <p><b>Target 1:</b> {selectedMetrics.target1}</p>
-              <p><b>Target 2:</b> {selectedMetrics.target2}</p>
-              <p><b>Position Size:</b> {selectedMetrics.positionSizing}</p>
-            </div>
-
-            <div style={{ ...panelStyle(), padding: 16 }}>
-              <h4 style={{ marginTop: 0, color: "#f8fafc" }}>Options Engine</h4>
-              <p><b>Calls:</b> {selectedMetrics.callPlan}</p>
-              <p><b>Puts:</b> {selectedMetrics.putPlan}</p>
-              <p><b>Session:</b> {quoteMeta?.session ?? "-"}</p>
-              <p><b>Trend:</b> {quoteMeta?.trend ?? "-"}</p>
-              <p><b>Day Range %:</b> {num(quoteMeta?.dayRangePercent).toFixed(2)}</p>
-            </div>
-          </div>
-
-          {selectedMetrics.notes.length ? (
-            <div
-              style={{
-                marginTop: 16,
-                padding: 14,
-                borderRadius: 14,
-                background: "rgba(30,41,59,0.72)",
-                border: "1px solid rgba(148,163,184,0.14)",
-              }}
-            >
-              <b style={{ color: "#f8fafc" }}>Model Notes</b>
-              <ul style={{ marginBottom: 0, color: "#cbd5e1" }}>
-                <li>{selectedMetrics.reason}</li>
-                {selectedMetrics.notes.map((note, idx) => (
-                  <li key={idx}>{note}</li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
         </div>
 
         <div style={{ display: "grid", gap: 18 }}>
+          <div style={{ ...panelStyle(), padding: 16 }}>
+            <h4 style={{ marginTop: 0, color: "#f8fafc" }}>Trade Plan</h4>
+            <p><b>Entry Zone:</b> {selectedMetrics.entryZone}</p>
+            <p><b>Stop Loss:</b> {selectedMetrics.stopLoss}</p>
+            <p><b>Target 1:</b> {selectedMetrics.target1}</p>
+            <p><b>Target 2:</b> {selectedMetrics.target2}</p>
+            <p><b>Position Size:</b> {selectedMetrics.positionSizing}</p>
+          </div>
+
+          <div style={{ ...panelStyle(), padding: 16 }}>
+            <h4 style={{ marginTop: 0, color: "#f8fafc" }}>Execution Notes</h4>
+            <p><b>Action:</b> {selectedMetrics.strategy}</p>
+            <p><b>Calls:</b> {selectedMetrics.callPlan}</p>
+            <p><b>Puts:</b> {selectedMetrics.putPlan}</p>
+            <p><b>Session:</b> {quoteMeta?.session ?? "-"}</p>
+            <p><b>Trend:</b> {quoteMeta?.trend ?? "-"}</p>
+            <p><b>Day Range %:</b> {num(quoteMeta?.dayRangePercent).toFixed(2)}</p>
+          </div>
+
+          <div style={{ ...panelStyle(), padding: 16 }}>
+            <h4 style={{ marginTop: 0, color: "#f8fafc" }}>Intelligence Notes</h4>
+            <ul style={{ marginBottom: 0, color: "#cbd5e1" }}>
+              <li>{selectedMetrics.reason}</li>
+              {selectedMetrics.notes.map((note, idx) => (
+                <li key={idx}>{note}</li>
+              ))}
+            </ul>
+          </div>
+
           <div style={{ ...panelStyle(), padding: 18 }}>
             <h3 style={{ marginTop: 0, color: "#f8fafc" }}>Catalysts & Headlines</h3>
 
@@ -1518,67 +1401,20 @@ export default function DashboardClientShell() {
           </div>
 
           <div style={{ ...panelStyle(), padding: 18 }}>
-            <h3 style={{ marginTop: 0, color: "#f8fafc" }}>Focus List</h3>
-            {topThree.length ? (
-              topThree.map(({ item, metrics }) => (
-                <div
-                  key={item.symbol}
-                  onClick={() => setSelectedSymbol(item.symbol)}
-                  style={{
-                    padding: "10px 0",
-                    borderBottom: "1px solid rgba(148,163,184,0.1)",
-                    cursor: "pointer",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 12,
-                  }}
-                >
-                  <div>
-                    <div style={{ fontWeight: 800, color: "#f8fafc" }}>{item.symbol}</div>
-                    <div style={{ fontSize: 12, color: "#94a3b8" }}>
-                      {metrics.recommendation} / {metrics.strategy}
-                    </div>
-                  </div>
-                  <div style={{ fontWeight: 800, color: "#22c55e" }}>
-                    {metrics.swing.toFixed(1)}
-                  </div>
-                </div>
-              ))
-            ) : (
-              <p style={{ color: "#94a3b8" }}>No ranked symbols yet.</p>
-            )}
-          </div>
-
-          <div style={{ ...panelStyle(), padding: 18 }}>
-            <h3 style={{ marginTop: 0, color: "#f8fafc" }}>Red Flags</h3>
-            {redRows.length ? (
-              redRows.slice(0, 5).map(({ item, metrics }) => (
-                <div
-                  key={item.symbol}
-                  onClick={() => setSelectedSymbol(item.symbol)}
-                  style={{
-                    padding: "10px 0",
-                    borderBottom: "1px solid rgba(148,163,184,0.1)",
-                    cursor: "pointer",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 12,
-                  }}
-                >
-                  <div>
-                    <div style={{ fontWeight: 800, color: "#f8fafc" }}>{item.symbol}</div>
-                    <div style={{ fontSize: 12, color: "#94a3b8" }}>
-                      {metrics.notes[0] ?? "Needs review"}
-                    </div>
-                  </div>
-                  <div style={{ fontWeight: 800, color: "#ef4444" }}>
-                    {metrics.riskLabel}
-                  </div>
-                </div>
-              ))
-            ) : (
-              <p style={{ color: "#94a3b8" }}>No major red flags detected.</p>
-            )}
+            <h3 style={{ marginTop: 0, color: "#f8fafc" }}>Movement Alerts</h3>
+            {movementAlerts.length ? movementAlerts.map((alert) => (
+              <div
+                key={alert}
+                style={{
+                  padding: "10px 0",
+                  borderBottom: "1px solid rgba(148,163,184,0.1)",
+                  color: "#cbd5e1",
+                  fontSize: 14,
+                }}
+              >
+                • {alert}
+              </div>
+            )) : <p style={{ color: "#94a3b8" }}>No movement alerts yet.</p>}
           </div>
         </div>
       </div>
@@ -1591,66 +1427,34 @@ export default function DashboardClientShell() {
           overflowX: "auto",
         }}
       >
-        <h3 style={{ marginTop: 0, color: "#f8fafc" }}>Sortable Opportunities</h3>
-
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            fontSize: 13,
-            minWidth: 1680,
-            color: "#e2e8f0",
-          }}
-        >
-          <thead>
-            <tr style={{ background: "rgba(30,41,59,0.72)" }}>
-              <th style={{ padding: 9, textAlign: "left" }}>
-                {renderSortButton("Ticker", "symbol")}
-              </th>
-              <th style={{ padding: 9, textAlign: "right" }}>
-                {renderSortButton("Price", "price")}
-              </th>
-              <th style={{ padding: 9, textAlign: "center" }}>
-                {renderSortButton("Tech", "technical")}
-              </th>
-              <th style={{ padding: 9, textAlign: "center" }}>
-                {renderSortButton("Fund", "fundamental")}
-              </th>
-              <th style={{ padding: 9, textAlign: "center" }}>
-                {renderSortButton("Intel", "intelligence")}
-              </th>
-              <th style={{ padding: 9, textAlign: "center" }}>
-                {renderSortButton("Env", "environment")}
-              </th>
-              <th style={{ padding: 9, textAlign: "center" }}>
-                {renderSortButton("Swing", "swing")}
-              </th>
-              <th style={{ padding: 9, textAlign: "center" }}>Swing Strategy</th>
-              <th style={{ padding: 9, textAlign: "center" }}>
-                {renderSortButton("3M", "threeMonth")}
-              </th>
-              <th style={{ padding: 9, textAlign: "center" }}>3M Strategy</th>
-              <th style={{ padding: 9, textAlign: "center" }}>
-                {renderSortButton("6M", "sixMonth")}
-              </th>
-              <th style={{ padding: 9, textAlign: "center" }}>6M Strategy</th>
-              <th style={{ padding: 9, textAlign: "center" }}>
-                {renderSortButton("1Y", "oneYear")}
-              </th>
-              <th style={{ padding: 9, textAlign: "center" }}>1Y Strategy</th>
-              <th style={{ padding: 9, textAlign: "center" }}>
-                {renderSortButton("Risk", "riskScore")}
-              </th>
-              <th style={{ padding: 9, textAlign: "center" }}>
-                {renderSortButton("Confidence", "confidence")}
-              </th>
-              <th style={{ padding: 9, textAlign: "center" }}>Why</th>
-              <th style={{ padding: 9, textAlign: "center" }}>Action</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {sortedRows.map(({ item, metrics }) => (
+        {(["High", "Medium", "Low"] as const).map((confidenceBucket) => (
+          <div key={confidenceBucket} style={{ marginBottom: 18 }}>
+            <h3 style={{ marginTop: 0, color: "#f8fafc" }}>{confidenceBucket} Confidence</h3>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                fontSize: 13,
+                minWidth: 1180,
+                color: "#e2e8f0",
+              }}
+            >
+              <thead>
+                <tr style={{ background: "rgba(30,41,59,0.72)" }}>
+                  <th style={{ padding: 9, textAlign: "left" }}>Ticker</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Swing</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>3M</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>6M</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>1Y</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Strategy</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Risk Label</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Risk Score</th>
+                  <th style={{ padding: 9, textAlign: "left" }}>Why</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {confidenceGroups[confidenceBucket].map(({ item, metrics }) => (
               <tr
                 key={item.symbol}
                 style={{
@@ -1674,66 +1478,8 @@ export default function DashboardClientShell() {
                   {item.symbol}
                 </td>
 
-                <td style={{ padding: 9, textAlign: "right" }}>
-                  ${num(item.price).toFixed(2)}
-                </td>
-
-                <td
-                  style={{
-                    padding: 9,
-                    textAlign: "center",
-                    fontWeight: 900,
-                    color: glowColor(metrics.technical * 10),
-                  }}
-                >
-                  {metrics.technical.toFixed(1)}
-                </td>
-
-                <td
-                  style={{
-                    padding: 9,
-                    textAlign: "center",
-                    fontWeight: 900,
-                    color: glowColor(metrics.fundamental * 10),
-                  }}
-                >
-                  {metrics.fundamental.toFixed(1)}
-                </td>
-
-                <td
-                  style={{
-                    padding: 9,
-                    textAlign: "center",
-                    fontWeight: 900,
-                    color: glowColor(metrics.intelligence * 10),
-                  }}
-                >
-                  {metrics.intelligence.toFixed(1)}
-                </td>
-
-                <td
-                  style={{
-                    padding: 9,
-                    textAlign: "center",
-                    fontWeight: 900,
-                    color: glowColor(metrics.environment * 10),
-                  }}
-                >
-                  {metrics.environment.toFixed(1)}
-                </td>
-
-                <td
-                  style={{
-                    padding: 9,
-                    textAlign: "center",
-                    fontWeight: 900,
-                    color: signalColor(metrics.swingSignal),
-                  }}
-                >
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 900, color: signalColor(metrics.swingSignal) }}>
                   {metrics.swing.toFixed(1)}
-                </td>
-                <td style={{ padding: 9, textAlign: "center", fontWeight: 800 }}>
-                  {metrics.recommendation} / {metrics.strategy}
                 </td>
 
                 <td
@@ -1746,22 +1492,15 @@ export default function DashboardClientShell() {
                 >
                   {metrics.threeMonth.toFixed(1)}
                 </td>
-                <td style={{ padding: 9, textAlign: "center", fontWeight: 800 }}>
-                  {metrics.threeMonthSignal} / {metrics.threeMonthStrategy}
-                </td>
-
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 900 }}>
                   {metrics.sixMonth.toFixed(1)}
-                </td>
-                <td style={{ padding: 9, textAlign: "center", fontWeight: 800 }}>
-                  {metrics.sixMonthSignal} / {metrics.sixMonthStrategy}
                 </td>
 
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 900 }}>
                   {metrics.oneYear.toFixed(1)}
                 </td>
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 800 }}>
-                  {metrics.oneYearSignal} / {metrics.oneYearStrategy}
+                  {metrics.strategy}
                 </td>
 
                 <td
@@ -1772,18 +1511,10 @@ export default function DashboardClientShell() {
                     color: riskColor(metrics.riskLabel),
                   }}
                 >
-                  {metrics.riskLabel} ({metrics.riskScore})
+                  {metrics.riskLabel}
                 </td>
-
-                <td
-                  style={{
-                    padding: 9,
-                    textAlign: "center",
-                    fontWeight: 900,
-                    color: glowColor(metrics.confidence * 10),
-                  }}
-                >
-                  {metrics.confidenceLabel}
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 900 }}>
+                  {metrics.riskScore}
                 </td>
 
                 <td style={{ padding: 9, textAlign: "left", maxWidth: 260 }}>
@@ -1807,9 +1538,14 @@ export default function DashboardClientShell() {
                   </button>
                 </td>
               </tr>
-            ))}
-          </tbody>
-        </table>
+                ))}
+              </tbody>
+            </table>
+            {!confidenceGroups[confidenceBucket].length ? (
+              <p style={{ color: "#94a3b8", marginTop: 8 }}>No symbols in this confidence group.</p>
+            ) : null}
+          </div>
+        ))}
       </div>
     </div>
   );

@@ -5,7 +5,7 @@ export type StrategyRecommendation =
   | "Buy Shares"
   | "Buy Shares + Calls"
   | "Buy Calls"
-  | "Starter Size Only"
+  | "Starter Shares"
   | "Watch"
   | "Avoid"
   | "Buy Puts";
@@ -138,11 +138,11 @@ export function evaluateRecommendation(input: RecommendationEngineInput): Recomm
     reason = "High composite score with contained volatility supports call exposure.";
   } else if (averageScore >= 7.1 && riskNumeric <= 3) {
     rating = scoreToRating(averageScore);
-    strategy = riskNumeric <= 2 ? "Buy Shares" : "Starter Size Only";
+    strategy = riskNumeric <= 2 ? "Buy Shares" : "Starter Shares";
     reason = strategy === "Buy Shares" ? "Broad score alignment supports share accumulation." : "Bullish score but risk is elevated; size positions carefully.";
   } else if (averageScore >= 5.5) {
     rating = "Watch";
-    strategy = riskNumeric >= 3 && averageScore < 6.3 ? "Watch" : "Starter Size Only";
+    strategy = riskNumeric >= 3 && averageScore < 6.3 ? "Watch" : "Starter Shares";
     confidence = confidence === "High" ? "Medium" : confidence;
     reason = riskNumeric >= 3 ? "Setup needs confirmation before new entries." : "Early setup forming; start small only.";
   } else {

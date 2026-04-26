@@ -2,8 +2,8 @@ import type { ConfidenceLevel, RiskLevel } from "@/lib/intelligence/types";
 
 export type ExecutionVehicle = "shares" | "calls" | "puts";
 export type ExecutionRating = "Strong" | "Moderate" | "Weak";
-export type SharesAction = "Buy Shares Now" | "Starter Shares Only" | "Wait for Pullback" | "Avoid Shares";
-export type CallsAction = "Buy Calls Now" | "Add Calls Only on Breakout" | "Avoid Calls" | "Calls Too Risky" | "Lotto Only";
+export type SharesAction = "Buy Shares" | "Starter Shares" | "Watch" | "Avoid";
+export type CallsAction = "Buy Calls" | "Watch" | "Avoid";
 export type PutsAction = "Buy Puts Now" | "Add Puts Only Below Support" | "Hedge Only" | "Avoid Puts";
 
 export type FinalExecutionStrategy =
@@ -11,8 +11,9 @@ export type FinalExecutionStrategy =
   | "Buy Calls"
   | "Buy Puts"
   | "Buy Shares + Calls"
-  | "Starter Shares, Add Calls on Breakout"
-  | "Shares + Protective Put"
+  | "Starter Shares"
+  | "Starter Shares + Calls on Breakout"
+  | "Hedge Only"
   | "Watch"
   | "Avoid";
 

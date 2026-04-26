@@ -7,11 +7,11 @@ export type RiskLevel = "Low" | "Medium" | "High" | "Extreme";
 export type RatingLabel = "Strong Buy" | "Buy" | "Watch" | "Avoid";
 export type StrategyRecommendation =
   | "Buy Shares"
-  | "Starter Shares, Add Calls on Breakout"
-  | "Shares + Protective Put"
+  | "Starter Shares"
+  | "Starter Shares + Calls on Breakout"
+  | "Hedge Only"
   | "Buy Shares + Calls"
   | "Buy Calls"
-  | "Starter Size Only"
   | "Watch"
   | "Avoid"
   | "Buy Puts";

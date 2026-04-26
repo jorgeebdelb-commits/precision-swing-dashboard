@@ -25,8 +25,8 @@ export function buildExecutionStrategy(input: ExecutionInput): ExecutionStrategy
     finalStrategy = "Buy Shares + Calls";
     selectedVehicle = "combo";
     sequencing.push("Buy shares now.", "Add calls only if price breaks resistance with volume.");
-  } else if (sharesPlan.rating !== "Weak" && callsPlan.suggestedAction === "Add Calls Only on Breakout") {
-    finalStrategy = "Starter Shares, Add Calls on Breakout";
+  } else if (sharesPlan.rating !== "Weak" && callsPlan.suggestedAction === "Watch") {
+    finalStrategy = "Starter Shares + Calls on Breakout";
     selectedVehicle = "combo";
     sequencing.push("Buy starter shares now.", "Add calls only on confirmed breakout above resistance.");
   } else if (sharesPlan.rating === "Strong") {
@@ -42,7 +42,7 @@ export function buildExecutionStrategy(input: ExecutionInput): ExecutionStrategy
     selectedVehicle = "puts";
     sequencing.push("Buy puts only after support break confirms.");
   } else if (sharesPlan.rating === "Moderate" && putsPlan.rating === "Moderate" && risk === "High") {
-    finalStrategy = "Shares + Protective Put";
+    finalStrategy = "Hedge Only";
     selectedVehicle = "combo";
     sequencing.push("Initiate small share position.", "Layer protective put if support weakens.");
   } else if (sharesPlan.rating === "Weak" && callsPlan.rating === "Weak" && putsPlan.rating === "Weak") {
