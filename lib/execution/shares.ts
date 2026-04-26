@@ -15,9 +15,9 @@ export function evaluateShares(input: ExecutionInput): SharesDecision {
 
   const rating = score >= 7.4 ? "Strong" : score >= 5.6 ? "Moderate" : "Weak";
 
-  let suggestedAction: SharesDecision["suggestedAction"] = "Avoid Shares";
-  if (rating === "Strong") suggestedAction = input.volatilityRisk > 7 ? "Starter Shares Only" : "Buy Shares Now";
-  if (rating === "Moderate") suggestedAction = input.volatilityRisk > 7.8 ? "Wait for Pullback" : "Starter Shares Only";
+  let suggestedAction: SharesDecision["suggestedAction"] = "Avoid";
+  if (rating === "Strong") suggestedAction = input.volatilityRisk > 7 ? "Starter Shares" : "Buy Shares";
+  if (rating === "Moderate") suggestedAction = input.volatilityRisk > 7.8 ? "Watch" : "Starter Shares";
 
   return {
     vehicle: "shares",
@@ -25,7 +25,7 @@ export function evaluateShares(input: ExecutionInput): SharesDecision {
     rating,
     suggestedAction,
     entryPlan:
-      suggestedAction === "Wait for Pullback"
+      suggestedAction === "Watch"
         ? `Wait for retest toward ${input.support ? `$${input.support.toFixed(2)}` : "support"} before adding shares.`
         : `Use staged entries around ${input.entryZone ?? "current zone"}.`,
     stopPlan: `Risk against ${input.stopLoss ?? "planned stop"}; reduce size if close below support.`,

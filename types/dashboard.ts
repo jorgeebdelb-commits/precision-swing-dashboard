@@ -35,11 +35,11 @@ export type SentimentResponse = {
 
 export type Strategy =
   | "Buy Shares"
-  | "Starter Shares, Add Calls on Breakout"
-  | "Shares + Protective Put"
+  | "Starter Shares"
+  | "Starter Shares + Calls on Breakout"
+  | "Hedge Only"
   | "Buy Shares + Calls"
   | "Buy Calls"
-  | "Starter Size Only"
   | "Watch"
   | "Avoid"
   | "Buy Puts";

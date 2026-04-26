@@ -16,10 +16,10 @@ export function evaluateCalls(input: ExecutionInput): CallsDecision {
 
   const rating = score >= 7.5 ? "Strong" : score >= 5.5 ? "Moderate" : "Weak";
 
-  let suggestedAction: CallsDecision["suggestedAction"] = "Avoid Calls";
-  if (rating === "Strong") suggestedAction = breakoutBias && volumeOk ? "Buy Calls Now" : "Add Calls Only on Breakout";
-  if (rating === "Moderate") suggestedAction = input.volatilityRisk > 8 ? "Calls Too Risky" : "Add Calls Only on Breakout";
-  if (rating === "Weak" && score >= 4.5 && input.volatilityRisk < 8.7) suggestedAction = "Lotto Only";
+  let suggestedAction: CallsDecision["suggestedAction"] = "Avoid";
+  if (rating === "Strong") suggestedAction = breakoutBias && volumeOk ? "Buy Calls" : "Watch";
+  if (rating === "Moderate") suggestedAction = "Watch";
+  if (rating === "Weak" && score >= 4.5 && input.volatilityRisk < 8.7) suggestedAction = "Watch";
 
   return {
     vehicle: "calls",

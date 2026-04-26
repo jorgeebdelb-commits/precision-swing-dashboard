@@ -659,6 +659,31 @@ function deriveDynamicHorizonScores(params: {
   };
 }
 
+function buildExecutionNotes(strategy: Strategy): { callPlan: string; putPlan: string } {
+  if (strategy === "Buy Shares + Calls") {
+    return { callPlan: "Buy Calls", putPlan: "Hedge Only" };
+  }
+  if (strategy === "Starter Shares + Calls on Breakout") {
+    return { callPlan: "Watch", putPlan: "Hedge Only" };
+  }
+  if (strategy === "Buy Calls") {
+    return { callPlan: "Buy Calls", putPlan: "Avoid" };
+  }
+  if (strategy === "Buy Puts") {
+    return { callPlan: "Avoid", putPlan: "Buy Puts" };
+  }
+  if (strategy === "Hedge Only") {
+    return { callPlan: "Avoid", putPlan: "Hedge Only" };
+  }
+  if (strategy === "Buy Shares" || strategy === "Starter Shares") {
+    return { callPlan: "Watch", putPlan: "Hedge Only" };
+  }
+  if (strategy === "Avoid") {
+    return { callPlan: "Avoid", putPlan: "Avoid" };
+  }
+  return { callPlan: "Watch", putPlan: "Watch" };
+}
+
 export function computeMetrics(item: Item): RowMetrics {
   const { pillars, technicals, profile } = computePillars(item);
   const { riskScore, riskLabel } = computeRisk(item, technicals);
@@ -773,6 +798,7 @@ export function computeMetrics(item: Item): RowMetrics {
     belowVWAP: num(item.price) < num(item.lr50, num(item.price)),
     eventRiskHigh: false,
   });
+  const executionNotes = buildExecutionNotes(executionPlan.finalStrategy);
 
   const hotSetup =
     num(item.price) > 0 &&
@@ -828,8 +854,8 @@ export function computeMetrics(item: Item): RowMetrics {
     target1: tradePlan.target1,
     target2: tradePlan.target2,
     positionSizing: tradePlan.positionSizing,
-    callPlan: executionPlan.callsPlan.suggestedAction,
-    putPlan: executionPlan.putsPlan.suggestedAction,
+    callPlan: executionNotes.callPlan,
+    putPlan: executionNotes.putPlan,
     notes: [...notes, ...executionPlan.sequencing],
     momentumToday: Math.round(clamp((pillars.technical * 0.6 + pillars.intelligence * 0.4) * 10)),
     redFlag,
