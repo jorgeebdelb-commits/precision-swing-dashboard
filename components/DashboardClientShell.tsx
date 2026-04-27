@@ -147,6 +147,27 @@ function inferSectorForSymbol(symbol: string): string {
 }
 
 const WATCHLIST_CACHE_KEY = "precision-dashboard-watchlist-cache";
+const SELECTED_SYMBOL_KEY = "precision-dashboard-selected-symbol";
+
+const pickDefaultSymbol = (entries: Item[], persistedSymbol?: string | null): string => {
+  const normalizedPersisted = upper(persistedSymbol ?? "");
+  if (normalizedPersisted && entries.some((item) => item.symbol === normalizedPersisted)) {
+    return normalizedPersisted;
+  }
+
+  const ranked = entries
+    .map((item) => ({
+      item,
+      metrics: computeMetrics(item),
+    }))
+    .sort((a, b) => b.metrics.swing - a.metrics.swing);
+
+  return (
+    ranked.find((row) => row.metrics.confidenceLabel === "High")?.item.symbol ??
+    ranked[0]?.item.symbol ??
+    ""
+  );
+};
 
 const mapWatchlistRowToItem = (row: Record<string, unknown>): Item => {
   const getValue = (...keys: string[]) => {
@@ -284,6 +305,7 @@ export default function DashboardClientShell() {
   useEffect(() => {
     const loadWatchlist = async () => {
       setLoading(true);
+      const persistedSymbol = localStorage.getItem(SELECTED_SYMBOL_KEY);
 
       try {
         if (!supabase) {
@@ -305,7 +327,7 @@ export default function DashboardClientShell() {
             : [];
 
           setItems(cachedItems);
-          setSelectedSymbol(cachedItems[0]?.symbol ?? "");
+          setSelectedSymbol(pickDefaultSymbol(cachedItems, persistedSymbol));
           return;
         }
 
@@ -324,7 +346,7 @@ export default function DashboardClientShell() {
           .filter((item) => item.symbol);
 
         setItems(mapped);
-        setSelectedSymbol(mapped[0]?.symbol ?? "");
+        setSelectedSymbol(pickDefaultSymbol(mapped, persistedSymbol));
         localStorage.setItem(WATCHLIST_CACHE_KEY, JSON.stringify(mapped));
       } catch {
         setIntelligenceMessage("Failed to load watchlist.");
@@ -335,6 +357,22 @@ export default function DashboardClientShell() {
 
     void loadWatchlist();
   }, []);
+
+  useEffect(() => {
+    if (!items.length) {
+      setSelectedSymbol("");
+      localStorage.removeItem(SELECTED_SYMBOL_KEY);
+      return;
+    }
+
+    const symbolExists = selectedSymbol && items.some((item) => item.symbol === selectedSymbol);
+    if (!symbolExists) {
+      setSelectedSymbol(pickDefaultSymbol(items, localStorage.getItem(SELECTED_SYMBOL_KEY)));
+      return;
+    }
+
+    localStorage.setItem(SELECTED_SYMBOL_KEY, selectedSymbol);
+  }, [items, selectedSymbol]);
 
   const rows = useMemo<RowData[]>(
     () =>
@@ -445,19 +483,6 @@ export default function DashboardClientShell() {
     }),
     [sortedRows]
   );
-
-  const movementAlerts = useMemo(() => {
-    return sortedRows.slice(0, 5).map(({ item, metrics }, index) => {
-      const confidenceText =
-        metrics.confidenceLabel === "High"
-          ? "upgraded to High Confidence"
-          : metrics.confidenceLabel === "Medium"
-          ? "moved to Medium Confidence"
-          : "moved to Low Confidence";
-      if (index < 3) return `${item.symbol} entered Spotlight Top ${index + 1}`;
-      return `${item.symbol} ${confidenceText}`;
-    });
-  }, [sortedRows]);
 
   const portfolioPlan = useMemo(() => {
     const totalCapital = Math.max(0, Number.parseFloat(portfolioCapitalInput.replace(/[^\d.]/g, "")) || 0);
@@ -1063,6 +1088,13 @@ export default function DashboardClientShell() {
           alignItems: "center",
         }}
       >
+        <div style={{ marginLeft: "auto" }}>
+          <InfoHelp
+            title="Intelligence Refresh"
+            content="Use this control bar to refresh data and add symbols to your watchlist. Saved updates persist after reload."
+            placement="bottom"
+          />
+        </div>
         <input
           value={newSymbol}
           onChange={(e) => setNewSymbol(e.target.value)}
@@ -1672,7 +1704,7 @@ export default function DashboardClientShell() {
 
           <div style={{ ...panelStyle(), padding: 16 }}>
             <SectionHelp
-              title="Execution Notes"
+              title="Options Engine"
               heading="h4"
               content="These notes explain why the system favors shares, calls, or puts. Breakout confirmation means price strength is proving itself. Calls can be avoided when risk or timing uncertainty is elevated."
             />
@@ -1686,7 +1718,7 @@ export default function DashboardClientShell() {
 
           <div style={{ ...panelStyle(), padding: 16 }}>
             <SectionHelp
-              title="Intelligence Notes"
+              title="Model Notes"
               heading="h4"
               content="This summarizes the reasoning engine: fundamentals, technicals, sector context, and macro context. Use it as plain-language support for the current recommendation."
             />
@@ -1730,25 +1762,6 @@ export default function DashboardClientShell() {
             )}
           </div>
 
-          <div style={{ ...panelStyle(), padding: 18 }}>
-            <SectionHelp
-              title="Movement Alerts"
-              content="Alerts track upgrades, downgrades, confidence shifts, and Spotlight movement. Use them to spot meaningful changes early."
-            />
-            {movementAlerts.length ? movementAlerts.map((alert) => (
-              <div
-                key={alert}
-                style={{
-                  padding: "10px 0",
-                  borderBottom: "1px solid rgba(148,163,184,0.1)",
-                  color: "#cbd5e1",
-                  fontSize: 14,
-                }}
-              >
-                • {alert}
-              </div>
-            )) : <p style={{ color: "#94a3b8" }}>No movement alerts yet.</p>}
-          </div>
         </div>
       </div>
 

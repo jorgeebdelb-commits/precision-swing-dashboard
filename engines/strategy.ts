@@ -100,7 +100,6 @@ export type RowMetrics = {
   putPlan: string;
   notes: string[];
   momentumToday: number;
-  redFlag: boolean;
   hotSetup: boolean;
 };
 
@@ -806,12 +805,6 @@ export function computeMetrics(item: Item): RowMetrics {
     finalDecision.confidence !== "Low" &&
     (riskLabel === "Low" || riskLabel === "Medium");
 
-  const redFlag =
-    num(item.price) <= 0 ||
-    riskLabel === "Extreme" ||
-    (riskLabel === "High" && swingExpanded < 6.9) ||
-    item.bias === "Bearish";
-
   const why = buildWhy(item, pillars, technicals, riskLabel, profile);
   const marketRegime = getMarketRegime(pillars);
 
@@ -858,7 +851,6 @@ export function computeMetrics(item: Item): RowMetrics {
     putPlan: executionNotes.putPlan,
     notes: [...notes, ...executionPlan.sequencing],
     momentumToday: Math.round(clamp((pillars.technical * 0.6 + pillars.intelligence * 0.4) * 10)),
-    redFlag,
     hotSetup,
   };
 }
