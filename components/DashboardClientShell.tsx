@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type {
   Item,
   HorizonKey,
@@ -12,6 +12,7 @@ import { computeMetrics, type RowMetrics } from "@/engines/strategy";
 import { supabase } from "@/app/lib/supabase";
 import { num, upper } from "@/app/lib/helpers";
 import type { IntelligenceApiResponse } from "@/lib/intelligence/types";
+import InfoHelp from "@/components/ui/InfoHelp";
 
 type ChartRange = "1D" | "5D" | "1M";
 
@@ -89,6 +90,26 @@ function statCardStyle() {
     borderRadius: 14,
     padding: 14,
   } as const;
+}
+
+function SectionHelp({
+  title,
+  content,
+  heading = "h3",
+  marginTop = 0,
+}: {
+  title: string;
+  content: ReactNode;
+  heading?: "h2" | "h3" | "h4";
+  marginTop?: number;
+}) {
+  const Tag = heading;
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+      <Tag style={{ margin: `${marginTop}px 0 0 0`, color: "#f8fafc" }}>{title}</Tag>
+      <InfoHelp title={title} content={content} placement="left" />
+    </div>
+  );
 }
 
 function parsePriceValue(value: string): number | null {
@@ -1085,6 +1106,13 @@ export default function DashboardClientShell() {
           marginBottom: 18,
         }}
       >
+        <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
+          <InfoHelp
+            title="Spotlight Cards"
+            content="Top-ranked symbols appear here because their swing score and setup quality are strongest right now. Spotlight rank can change quickly when confidence, momentum, or risk shifts."
+            placement="bottom"
+          />
+        </div>
         {(topThree.length ? topThree : rows.slice(0, 3)).map(
           ({ item, metrics }, index) => (
             <div
@@ -1094,8 +1122,19 @@ export default function DashboardClientShell() {
                 ...softCard(metrics.swingSignal),
                 padding: 18,
                 cursor: "pointer",
+                position: "relative",
               }}
             >
+              <div style={{ position: "absolute", top: 12, right: 12 }}>
+                <InfoHelp
+                  title={`${item.symbol} Spotlight`}
+                  content={`This symbol is ranked in Spotlight because its current swing score is ${metrics.swing.toFixed(
+                    1
+                  )} with a ${metrics.swingSignal} signal. The entry zone helps you avoid chasing price.`}
+                  placement="left"
+                  size={14}
+                />
+              </div>
               <div style={{ fontSize: 12, color: "#94a3b8" }}>
                 Spotlight #{index + 1}
               </div>
@@ -1161,6 +1200,11 @@ export default function DashboardClientShell() {
                 {selectedItem.symbol}
               </h2>
             </div>
+            <InfoHelp
+              title="Selected Ticker Chart"
+              content="This chart shows recent price movement for the selected ticker. Dashed levels mark support/resistance and trend references. Use 1D/5D/1M to change timeframe, read Bullish/Neutral/Bearish for short-term state, and use entry zones to improve timing."
+              placement="left"
+            />
 
             <select
               value={selectedSymbol}
@@ -1365,6 +1409,13 @@ export default function DashboardClientShell() {
               gap: 12,
             }}
           >
+            <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
+              <InfoHelp
+                title="Price, Risk, Confidence, Momentum"
+                content="Price is the latest quote. Risk combines volatility and downside exposure. Confidence reflects factor alignment. Momentum tracks short-term strength. Use all together before choosing an action."
+                placement="bottom"
+              />
+            </div>
             {[
               ["Price", `$${selectedItem.price.toFixed(2)}`, "#f8fafc"],
               ["Risk Label", selectedMetrics.riskLabel, riskColor(selectedMetrics.riskLabel)],
@@ -1410,6 +1461,13 @@ export default function DashboardClientShell() {
               gap: 12,
             }}
           >
+            <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
+              <InfoHelp
+                title="Horizon Cards"
+                content="Swing, 3 Month, 6 Month, and 1 Year scores reflect different holding periods. Scores can differ because trend strength, risk, and macro factors change across timeframes."
+                placement="bottom"
+              />
+            </div>
             {[
               {
                 label: "Swing",
@@ -1464,7 +1522,10 @@ export default function DashboardClientShell() {
           </div>
 
           <div style={{ ...panelStyle(), padding: 16, marginTop: 18 }}>
-            <h3 style={{ marginTop: 0, color: "#f8fafc" }}>Portfolio Allocation Engine</h3>
+            <SectionHelp
+              title="Portfolio Allocation Engine"
+              content="Deployable capital is what the system suggests putting to work now. Cash reserve is dry powder. Allocation sizing and sector concentration help avoid overexposure while keeping risk balanced."
+            />
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(160px, 1fr))", gap: 10 }}>
               <label style={{ fontSize: 12, color: "#94a3b8" }}>
                 Total Capital
@@ -1597,7 +1658,11 @@ export default function DashboardClientShell() {
 
         <div style={{ display: "grid", gap: 18 }}>
           <div style={{ ...panelStyle(), padding: 16 }}>
-            <h4 style={{ marginTop: 0, color: "#f8fafc" }}>Trade Plan</h4>
+            <SectionHelp
+              title="Trade Plan"
+              heading="h4"
+              content="Entry zone helps avoid chasing price. Stop loss defines your planned downside. Targets help you scale profits, and position size helps control total portfolio risk."
+            />
             <p><b>Entry Zone:</b> {selectedMetrics.entryZone}</p>
             <p><b>Stop Loss:</b> {selectedMetrics.stopLoss}</p>
             <p><b>Target 1:</b> {selectedMetrics.target1}</p>
@@ -1606,7 +1671,11 @@ export default function DashboardClientShell() {
           </div>
 
           <div style={{ ...panelStyle(), padding: 16 }}>
-            <h4 style={{ marginTop: 0, color: "#f8fafc" }}>Execution Notes</h4>
+            <SectionHelp
+              title="Execution Notes"
+              heading="h4"
+              content="These notes explain why the system favors shares, calls, or puts. Breakout confirmation means price strength is proving itself. Calls can be avoided when risk or timing uncertainty is elevated."
+            />
             <p><b>Action:</b> {selectedMetrics.strategy}</p>
             <p><b>Calls:</b> {selectedMetrics.callPlan}</p>
             <p><b>Puts:</b> {selectedMetrics.putPlan}</p>
@@ -1616,7 +1685,11 @@ export default function DashboardClientShell() {
           </div>
 
           <div style={{ ...panelStyle(), padding: 16 }}>
-            <h4 style={{ marginTop: 0, color: "#f8fafc" }}>Intelligence Notes</h4>
+            <SectionHelp
+              title="Intelligence Notes"
+              heading="h4"
+              content="This summarizes the reasoning engine: fundamentals, technicals, sector context, and macro context. Use it as plain-language support for the current recommendation."
+            />
             <ul style={{ marginBottom: 0, color: "#cbd5e1" }}>
               <li>{selectedMetrics.reason}</li>
               {selectedMetrics.notes.map((note, idx) => (
@@ -1626,7 +1699,10 @@ export default function DashboardClientShell() {
           </div>
 
           <div style={{ ...panelStyle(), padding: 18 }}>
-            <h3 style={{ marginTop: 0, color: "#f8fafc" }}>Catalysts & Headlines</h3>
+            <SectionHelp
+              title="Catalysts & Headlines"
+              content="News and catalysts can quickly change momentum, risk, and ranking. Treat this section as a fast check before entering or adding to a position."
+            />
 
             {sentimentMeta?.topHeadlines?.length ? (
               <div>
@@ -1655,7 +1731,10 @@ export default function DashboardClientShell() {
           </div>
 
           <div style={{ ...panelStyle(), padding: 18 }}>
-            <h3 style={{ marginTop: 0, color: "#f8fafc" }}>Movement Alerts</h3>
+            <SectionHelp
+              title="Movement Alerts"
+              content="Alerts track upgrades, downgrades, confidence shifts, and Spotlight movement. Use them to spot meaningful changes early."
+            />
             {movementAlerts.length ? movementAlerts.map((alert) => (
               <div
                 key={alert}
@@ -1681,6 +1760,13 @@ export default function DashboardClientShell() {
           overflowX: "auto",
         }}
       >
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+          <InfoHelp
+            title="Confidence Watchlists"
+            content="High confidence names have the strongest factor alignment now. Medium confidence names are developing. Low confidence names are more speculative and require extra caution."
+            placement="bottom"
+          />
+        </div>
         {(["High", "Medium", "Low"] as const).map((confidenceBucket) => (
           <div key={confidenceBucket} style={{ marginBottom: 18 }}>
             <h3 style={{ marginTop: 0, color: "#f8fafc" }}>{confidenceBucket} Confidence</h3>
