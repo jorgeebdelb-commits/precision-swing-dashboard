@@ -133,6 +133,10 @@ function toMomentumLabel(score: number): "Bullish" | "Neutral" | "Bearish" {
   return "Neutral";
 }
 
+function toDisplayScore(score: number): number {
+  return Math.round(num(score) * 10);
+}
+
 function inferSectorForSymbol(symbol: string): string {
   const upperSymbol = symbol.toUpperCase();
   if (["NVDA", "AMD", "MRVL", "AVGO", "TSM"].includes(upperSymbol)) return "Semiconductors";
@@ -225,18 +229,18 @@ const toWatchlistRow = (row: Item) => ({
   symbol: row.symbol,
   bias: row.bias,
   price: row.price,
-  swingScore: row.swingScore,
-  threeMonthScore: row.threeMonthScore,
-  sixMonthScore: row.sixMonthScore,
-  oneYearScore: row.oneYearScore,
+  swing_score: row.swingScore,
+  three_month_score: row.threeMonthScore,
+  six_month_score: row.sixMonthScore,
+  one_year_score: row.oneYearScore,
   support: row.support,
   resistance: row.resistance,
   rsi: row.rsi,
-  volumeRatio: row.volumeRatio,
-  technicalScore: row.technicalScore,
-  whaleScore: row.whaleScore,
-  macroScore: row.macroScore,
-  politicalScore: row.politicalScore,
+  volume_ratio: row.volumeRatio,
+  technical_score: row.technicalScore,
+  whale_score: row.whaleScore,
+  macro_score: row.macroScore,
+  political_score: row.politicalScore,
   notes: row.notes,
 });
 
@@ -288,7 +292,7 @@ export default function DashboardClientShell() {
 
   const [history, setHistory] = useState<{ time: string; price: number }[]>([]);
   const [chartRange, setChartRange] = useState<ChartRange>("1D");
-  const [portfolioCapitalInput, setPortfolioCapitalInput] = useState("100000");
+  const [portfolioCapitalInput, setPortfolioCapitalInput] = useState("0");
   const [portfolioRiskStyle, setPortfolioRiskStyle] = useState<RiskStyle>("Balanced");
   const [portfolioHorizonFocus, setPortfolioHorizonFocus] = useState<HorizonFocus>("Swing");
   const latestItemsRef = useRef<Item[]>([]);
@@ -465,27 +469,49 @@ export default function DashboardClientShell() {
     () =>
       [...rows]
         .filter((x) => num(x.item.price) > 0)
-        .sort((a, b) => b.metrics.swing - a.metrics.swing)
+        .sort((a, b) => b.metrics.finalScore - a.metrics.finalScore)
         .slice(0, 3),
     [rows]
   );
 
   const sortedRows = useMemo(
-    () => [...rows].sort((a, b) => b.metrics.swing - a.metrics.swing),
+    () => [...rows].sort((a, b) => b.metrics.finalScore - a.metrics.finalScore),
     [rows]
   );
 
-  const confidenceGroups = useMemo(
-    () => ({
-      High: sortedRows.filter((row) => row.metrics.confidenceLabel === "High"),
-      Medium: sortedRows.filter((row) => row.metrics.confidenceLabel === "Medium"),
-      Low: sortedRows.filter((row) => row.metrics.confidenceLabel === "Low"),
-    }),
-    [sortedRows]
-  );
+  const watchlistBuckets = useMemo(() => {
+    const sorted = [...rows].sort((a, b) => {
+      if (b.metrics.finalScore !== a.metrics.finalScore) return b.metrics.finalScore - a.metrics.finalScore;
+      if (b.metrics.confidencePercent !== a.metrics.confidencePercent) {
+        return b.metrics.confidencePercent - a.metrics.confidencePercent;
+      }
+      return b.metrics.swing - a.metrics.swing;
+    });
+
+    return {
+      high: sorted.filter(
+        (row) =>
+          row.metrics.finalScore >= 80 &&
+          row.metrics.confidencePercent >= 70 &&
+          row.metrics.contradictionFlags.length === 0
+      ),
+      medium: sorted.filter((row) => row.metrics.finalScore >= 65 && row.metrics.finalScore <= 79),
+      low: sorted.filter((row) => row.metrics.finalScore < 65 || row.metrics.contradictionFlags.length > 0),
+    };
+  }, [rows]);
 
   const portfolioPlan = useMemo(() => {
     const totalCapital = Math.max(0, Number.parseFloat(portfolioCapitalInput.replace(/[^\d.]/g, "")) || 0);
+    if (totalCapital <= 0) {
+      return {
+        totalCapital: 0,
+        deployableCapital: 0,
+        cashReserve: 0,
+        topAllocations: [],
+        weightedRisk: 0,
+        sectorConcentration: [],
+      };
+    }
     const deployBase =
       portfolioRiskStyle === "Conservative" ? 0.58 : portfolioRiskStyle === "Aggressive" ? 0.9 : 0.75;
     const focusKey =
@@ -1126,7 +1152,7 @@ export default function DashboardClientShell() {
         </button>
 
         <span style={{ color: "#94a3b8", fontSize: 13 }}>
-          {intelligenceMessage || "Swing score is the default ranking."}
+          {intelligenceMessage || "Final score is the default ranking."}
         </span>
       </div>
 
@@ -1141,7 +1167,7 @@ export default function DashboardClientShell() {
         <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
           <InfoHelp
             title="Spotlight Cards"
-            content="Top-ranked symbols appear here because their swing score and setup quality are strongest right now. Spotlight rank can change quickly when confidence, momentum, or risk shifts."
+            content="Top-ranked symbols appear here because their score quality and setup alignment are strongest right now. Spotlight rank can change quickly when confidence, momentum, or risk shifts."
             placement="bottom"
           />
         </div>
@@ -1160,9 +1186,7 @@ export default function DashboardClientShell() {
               <div style={{ position: "absolute", top: 12, right: 12 }}>
                 <InfoHelp
                   title={`${item.symbol} Spotlight`}
-                  content={`This symbol is ranked in Spotlight because its current swing score is ${metrics.swing.toFixed(
-                    1
-                  )} with a ${metrics.swingSignal} signal. The entry zone helps you avoid chasing price.`}
+                  content={`This symbol is ranked in Spotlight because its final score is ${metrics.finalScore} with ${metrics.confidencePercent}% confidence. The entry zone helps you avoid chasing price.`}
                   placement="left"
                   size={14}
                 />
@@ -1189,7 +1213,7 @@ export default function DashboardClientShell() {
                     fontWeight: 800,
                   }}
                 >
-                  Swing {metrics.swing.toFixed(1)}
+                  Swing {toDisplayScore(metrics.swing)}
                 </div>
               </div>
               <div
@@ -1409,7 +1433,7 @@ export default function DashboardClientShell() {
                           color: "#cbd5e1",
                         }}
                       >
-                        {label}: {Number(value).toFixed(1)}
+                        {label}: {toDisplayScore(Number(value))}
                       </span>
                     ))}
                   </div>
@@ -1437,7 +1461,7 @@ export default function DashboardClientShell() {
             style={{
               marginTop: 16,
               display: "grid",
-              gridTemplateColumns: "repeat(7, minmax(120px, 1fr))",
+              gridTemplateColumns: "repeat(8, minmax(120px, 1fr))",
               gap: 12,
             }}
           >
@@ -1454,7 +1478,7 @@ export default function DashboardClientShell() {
               ["Risk Score", `${selectedMetrics.riskScore}`, "#f8fafc"],
               [
                 "Confidence",
-                selectedMetrics.confidenceLabel,
+                `${selectedMetrics.confidencePercent}%`,
                 selectedMetrics.confidenceLabel === "High"
                   ? "#22c55e"
                   : selectedMetrics.confidenceLabel === "Medium"
@@ -1467,6 +1491,7 @@ export default function DashboardClientShell() {
                 selectedMetrics.momentumToday,
                 glowColor(selectedMetrics.momentumToday),
               ],
+              ["Final Score", selectedMetrics.finalScore, glowColor(selectedMetrics.finalScore)],
               ["Action", selectedMetrics.strategy, "#38bdf8"],
             ].map((card) => (
               <div key={String(card[0])} style={statCardStyle()}>
@@ -1775,14 +1800,20 @@ export default function DashboardClientShell() {
       >
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
           <InfoHelp
-            title="Confidence Watchlists"
-            content="High confidence names have the strongest factor alignment now. Medium confidence names are developing. Low confidence names are more speculative and require extra caution."
+            title="Watchlist Buckets"
+            content="High Confidence requires final score >= 80, confidence >= 70, and no contradiction flags. Medium is 65-79. Low is under 65 or contains contradictory signals."
             placement="bottom"
           />
         </div>
-        {(["High", "Medium", "Low"] as const).map((confidenceBucket) => (
-          <div key={confidenceBucket} style={{ marginBottom: 18 }}>
-            <h3 style={{ marginTop: 0, color: "#f8fafc" }}>{confidenceBucket} Confidence</h3>
+        {(
+          [
+            ["high", "High Confidence"],
+            ["medium", "Medium"],
+            ["low", "Low"],
+          ] as const
+        ).map(([bucketKey, bucketTitle]) => (
+          <div key={bucketKey} style={{ marginBottom: 18 }}>
+            <h3 style={{ marginTop: 0, color: "#f8fafc" }}>{bucketTitle}</h3>
             <table
               style={{
                 width: "100%",
@@ -1801,13 +1832,13 @@ export default function DashboardClientShell() {
                   <th style={{ padding: 9, textAlign: "center" }}>1Y</th>
                   <th style={{ padding: 9, textAlign: "center" }}>Strategy</th>
                   <th style={{ padding: 9, textAlign: "center" }}>Risk Label</th>
-                  <th style={{ padding: 9, textAlign: "center" }}>Risk Score</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Final Score</th>
                   <th style={{ padding: 9, textAlign: "left" }}>Why</th>
                   <th style={{ padding: 9, textAlign: "center" }}>Action</th>
                 </tr>
               </thead>
               <tbody>
-                {confidenceGroups[confidenceBucket].map(({ item, metrics }) => (
+                {watchlistBuckets[bucketKey].map(({ item, metrics }) => (
               <tr
                 key={item.symbol}
                 style={{
@@ -1832,7 +1863,7 @@ export default function DashboardClientShell() {
                 </td>
 
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 900, color: signalColor(metrics.swingSignal) }}>
-                  {metrics.swing.toFixed(1)}
+                  {toDisplayScore(metrics.swing)}
                 </td>
 
                 <td
@@ -1843,14 +1874,14 @@ export default function DashboardClientShell() {
                     color: signalColor(metrics.threeMonthSignal),
                   }}
                 >
-                  {metrics.threeMonth.toFixed(1)}
+                  {toDisplayScore(metrics.threeMonth)}
                 </td>
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 900 }}>
-                  {metrics.sixMonth.toFixed(1)}
+                  {toDisplayScore(metrics.sixMonth)}
                 </td>
 
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 900 }}>
-                  {metrics.oneYear.toFixed(1)}
+                  {toDisplayScore(metrics.oneYear)}
                 </td>
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 800 }}>
                   {metrics.strategy}
@@ -1867,11 +1898,12 @@ export default function DashboardClientShell() {
                   {metrics.riskLabel}
                 </td>
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 900 }}>
-                  {metrics.riskScore}
+                  {metrics.finalScore}
                 </td>
 
                 <td style={{ padding: 9, textAlign: "left", maxWidth: 260 }}>
                   {metrics.reason}
+                  {metrics.contradictionFlags.length ? ` (${metrics.contradictionFlags.join("; ")})` : ""}
                 </td>
 
                 <td style={{ padding: 9, textAlign: "center" }}>
@@ -1894,8 +1926,8 @@ export default function DashboardClientShell() {
                 ))}
               </tbody>
             </table>
-            {!confidenceGroups[confidenceBucket].length ? (
-              <p style={{ color: "#94a3b8", marginTop: 8 }}>No symbols in this confidence group.</p>
+            {!watchlistBuckets[bucketKey].length ? (
+              <p style={{ color: "#94a3b8", marginTop: 8 }}>No symbols in this bucket.</p>
             ) : null}
           </div>
         ))}
