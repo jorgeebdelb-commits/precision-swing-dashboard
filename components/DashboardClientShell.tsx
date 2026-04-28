@@ -33,21 +33,20 @@ type RowData = {
   metrics: RowMetrics;
 };
 
-type TierKey = "tier1" | "tier2" | "tier3";
+type EngineKey = "swing" | "threeMonth" | "sixMonth" | "oneYear";
 
 type RiskStyle = "Conservative" | "Balanced" | "Aggressive";
 type HorizonFocus = "Swing" | "3 Month" | "6 Month" | "1 Year";
 
-const BUY_STRATEGIES = new Set<string>([
-  "Spec Buy",
-  "Buy Shares",
-  "Starter Shares",
-  "Buy Calls",
-  "Buy Shares + Calls",
-  "Buy LEAPS",
-]);
+const HORIZON_OPTIONS: Array<{ key: EngineKey; label: string }> = [
+  { key: "swing", label: "Swing (<3M)" },
+  { key: "threeMonth", label: "3 Month" },
+  { key: "sixMonth", label: "6 Month" },
+  { key: "oneYear", label: "1 Year+ / LEAPS" },
+];
 
 function scoreColor(score: number) {
+
   if (score >= 90) return "#22c55e";
   if (score >= 80) return "#4ade80";
   if (score >= 70) return "#facc15";
@@ -156,130 +155,42 @@ function toDisplayScore(score: number): number {
   return Math.round(num(score) * 10);
 }
 
-type BreadthRegime = "strong" | "neutral" | "weak";
 
-function getBreadthRegime(rows: RowData[]): BreadthRegime {
-  if (!rows.length) return "neutral";
-  const qualitySetups = rows.filter(
-    (row) =>
-      BUY_STRATEGIES.has(row.metrics.strategy) &&
-      (row.metrics.riskLabel === "Low" || row.metrics.riskLabel === "Medium") &&
-      row.metrics.confidencePercent >= 66 &&
-      row.metrics.finalScore >= 67
-  ).length;
-  const qualityRatio = qualitySetups / rows.length;
-  if (qualityRatio >= 0.45 || qualitySetups >= 4) return "strong";
-  if (qualityRatio <= 0.2 && qualitySetups <= 1) return "weak";
-  return "neutral";
+
+function engineScore(metrics: RowMetrics, engine: EngineKey): number {
+  if (engine === "swing") return metrics.swing;
+  if (engine === "threeMonth") return metrics.threeMonth;
+  if (engine === "sixMonth") return metrics.sixMonth;
+  return metrics.oneYear;
 }
 
-function resolveTier(metrics: RowMetrics, breadthRegime: BreadthRegime = "neutral"): {
-  tier: TierKey;
-  contradiction: string[];
-  demotionReason: string;
-} {
-  const contradiction: string[] = [];
-  const isBuy = BUY_STRATEGIES.has(metrics.strategy);
-  const isWatch = metrics.strategy === "Watch";
-  const isAvoid = metrics.strategy === "Avoid";
-  const isLowOrModerateRisk = metrics.riskLabel === "Low" || metrics.riskLabel === "Medium";
-  const isHighRisk = metrics.riskLabel === "High";
-  const isExtremeRisk = metrics.riskLabel === "Extreme";
-  const hasEliteEvidence =
-    metrics.intelligence >= 7.5 ||
-    metrics.fundamental >= 7.6 ||
-    metrics.momentumToday >= 78 ||
-    metrics.hotSetup;
-
-  if (isAvoid) {
-    return {
-      tier: "tier3",
-      contradiction,
-      demotionReason: "Avoid strategy force-routes this symbol to Tier 3.",
-    };
-  }
-
-  if (isExtremeRisk) {
-    return {
-      tier: "tier3",
-      contradiction,
-      demotionReason: "Extreme risk force-routes this symbol to Tier 3.",
-    };
-  }
-
-  if (isWatch) {
-    if (isLowOrModerateRisk) {
-      return {
-        tier: "tier2",
-        contradiction,
-        demotionReason: `Watch with ${metrics.riskLabel} risk stays in Tier 2 for preparation only.`,
-      };
-    }
-
-    return {
-      tier: "tier3",
-      contradiction,
-      demotionReason: `Watch with ${metrics.riskLabel} risk blocks capital deployment and routes to Tier 3.`,
-    };
-  }
-
-  if (isBuy) {
-    const tier1ConfidenceFloor = breadthRegime === "strong" ? 66 : breadthRegime === "weak" ? 74 : 70;
-    const passesOpportunityGate =
-      metrics.opportunityScore >= 80 || (metrics.opportunityScore >= 72 && hasEliteEvidence);
-    if (isLowOrModerateRisk && metrics.confidencePercent >= tier1ConfidenceFloor && passesOpportunityGate) {
-      return {
-        tier: "tier1",
-        contradiction,
-        demotionReason: `${metrics.strategy} with ${metrics.riskLabel} risk and ${metrics.confidencePercent}% confidence qualifies for Tier 1 deployment (${breadthRegime} breadth floor ${tier1ConfidenceFloor}%).`,
-      };
-    }
-    if (isLowOrModerateRisk && metrics.confidencePercent >= tier1ConfidenceFloor && !passesOpportunityGate) {
-      return {
-        tier: "tier2",
-        contradiction,
-        demotionReason: `Tier 1 blocked: opportunity score ${metrics.opportunityScore} requires >=80, or >=72 plus elite evidence.`,
-      };
-    }
-
-    if (isHighRisk) {
-      return {
-        tier: "tier2",
-        contradiction,
-        demotionReason: `${metrics.strategy} but High risk -> Tier 2 only (starter/half size).`,
-      };
-    }
-
-    return {
-      tier: "tier2",
-      contradiction,
-      demotionReason: `${metrics.strategy} with ${metrics.riskLabel} risk but ${metrics.confidencePercent}% confidence (<70) stays Tier 2.`,
-    };
-  }
-
-  contradiction.push(`Unsupported strategy ${metrics.strategy} for tiering rules`);
-  return {
-    tier: "tier3",
-    contradiction,
-    demotionReason: "Non-buy strategy is not deployable capital and defaults to Tier 3.",
-  };
+function engineVerdict(metrics: RowMetrics, engine: EngineKey): string {
+  if (engine === "swing") return metrics.swingSignal;
+  if (engine === "threeMonth") return metrics.threeMonthSignal;
+  if (engine === "sixMonth") return metrics.sixMonthSignal;
+  return metrics.oneYearSignal;
 }
 
-function positionSizeForTier(tier: TierKey): string {
-  if (tier === "tier1") return "Full Size / Standard Size";
-  if (tier === "tier2") return "Starter Size / Half Size";
-  return "No Position";
+function engineRisk(metrics: RowMetrics, engine: EngineKey): RiskLabel {
+  const base = metrics.riskLabel === "Extreme" ? 4 : metrics.riskLabel === "High" ? 3 : metrics.riskLabel === "Medium" ? 2 : 1;
+  const horizonAdjust = engine === "swing" ? 1 : engine === "threeMonth" ? 0 : engine === "sixMonth" ? -0.2 : -0.35;
+  const scoreAdjust = (7 - engineScore(metrics, engine)) * 0.35;
+  const riskNumber = Math.max(1, Math.min(4, base + horizonAdjust + scoreAdjust));
+  if (riskNumber >= 3.6) return "Extreme";
+  if (riskNumber >= 2.8) return "High";
+  if (riskNumber >= 1.9) return "Medium";
+  return "Low";
 }
 
-function explainTier(metrics: RowMetrics, breadthRegime: BreadthRegime): string {
-  const tierContext = resolveTier(metrics, breadthRegime);
-  if (tierContext.tier === "tier1") {
-    return `Tier 1: ${tierContext.demotionReason}`;
-  }
-  if (tierContext.tier === "tier2") {
-    return `Tier 2: ${tierContext.demotionReason}`;
-  }
-  return `Tier 3: ${tierContext.demotionReason}`;
+function bestStrategy(metrics: RowMetrics): Strategy {
+  const ranked: Array<{ engine: EngineKey; score: number; strategy: Strategy }> = [
+    { engine: "swing", score: metrics.swing, strategy: metrics.swingStrategy },
+    { engine: "threeMonth", score: metrics.threeMonth, strategy: metrics.threeMonthStrategy },
+    { engine: "sixMonth", score: metrics.sixMonth, strategy: metrics.sixMonthStrategy },
+    { engine: "oneYear", score: metrics.oneYear, strategy: metrics.oneYearStrategy },
+  ];
+  ranked.sort((a, b) => b.score - a.score);
+  return ranked[0]?.strategy ?? metrics.strategy;
 }
 
 function inferSectorForSymbol(symbol: string): string {
@@ -388,6 +299,7 @@ export default function DashboardClientShell() {
   const [portfolioCapitalInput, setPortfolioCapitalInput] = useState("0");
   const [portfolioRiskStyle, setPortfolioRiskStyle] = useState<RiskStyle>("Balanced");
   const [portfolioHorizonFocus, setPortfolioHorizonFocus] = useState<HorizonFocus>("Swing");
+  const [watchlistHorizon, setWatchlistHorizon] = useState<EngineKey>("swing");
   const latestItemsRef = useRef<Item[]>([]);
 
   useEffect(() => {
@@ -568,70 +480,21 @@ export default function DashboardClientShell() {
     };
   }, [chartRange, chartSeries, selectedItem, selectedMetrics]);
 
-  const sortedRows = useMemo(
-    () => [...rows].sort((a, b) => b.metrics.finalScore - a.metrics.finalScore),
-    [rows]
-  );
-  const breadthRegime = useMemo(() => getBreadthRegime(sortedRows), [sortedRows]);
-  const topThree = useMemo(
+  const sortedRows = useMemo(() => {
+    return [...rows].sort((a, b) => {
+      const scoreDiff = engineScore(b.metrics, watchlistHorizon) - engineScore(a.metrics, watchlistHorizon);
+      if (scoreDiff !== 0) return scoreDiff;
+      return b.metrics.confidencePercent - a.metrics.confidencePercent;
+    });
+  }, [rows, watchlistHorizon]);
+
+  const spotlightRows = useMemo(
     () =>
-      [...rows]
-        .filter((x) => num(x.item.price) > 0 && resolveTier(x.metrics, breadthRegime).tier === "tier1")
-        .sort((a, b) => b.metrics.finalScore - a.metrics.finalScore)
+      sortedRows
+        .filter((row) => num(row.item.price) > 0)
         .slice(0, 3),
-    [breadthRegime, rows]
+    [sortedRows]
   );
-
-  const watchlistBuckets = useMemo(() => {
-    const sorted = [...sortedRows].sort((a, b) => {
-      if (b.metrics.opportunityScore !== a.metrics.opportunityScore) {
-        return b.metrics.opportunityScore - a.metrics.opportunityScore;
-      }
-      if (b.metrics.confidencePercent !== a.metrics.confidencePercent) {
-        return b.metrics.confidencePercent - a.metrics.confidencePercent;
-      }
-      return b.metrics.swing - a.metrics.swing;
-    });
-
-    const buckets: Record<TierKey, RowData[]> = {
-      tier1: [],
-      tier2: [],
-      tier3: [],
-    };
-    const contradictions: string[] = [];
-
-    const tier1Candidates: RowData[] = [];
-    sorted.forEach((row) => {
-      const tierContext = resolveTier(row.metrics, breadthRegime);
-      if (tierContext.tier === "tier1") tier1Candidates.push(row);
-      else buckets[tierContext.tier].push(row);
-      tierContext.contradiction.forEach((issue) => contradictions.push(`${row.item.symbol}: ${issue}`));
-    });
-
-    tier1Candidates
-      .sort((a, b) => {
-        if (b.metrics.opportunityScore !== a.metrics.opportunityScore) {
-          return b.metrics.opportunityScore - a.metrics.opportunityScore;
-        }
-        return b.metrics.confidencePercent - a.metrics.confidencePercent;
-      })
-      .forEach((row, index) => {
-        if (index < 3) {
-          buckets.tier1.push(row);
-          return;
-        }
-        buckets.tier2.push(row);
-        contradictions.push(
-          `${row.item.symbol}: Tier 1 premium cap applied (top 3 only); symbol moved to Tier 2 despite qualifying floor.`
-        );
-      });
-
-    return {
-      ...buckets,
-      contradictions,
-      breadthRegime,
-    };
-  }, [breadthRegime, sortedRows]);
 
   const portfolioPlan = useMemo(() => {
     const totalCapital = Math.max(0, Number.parseFloat(portfolioCapitalInput.replace(/[^\d.]/g, "")) || 0);
@@ -679,6 +542,7 @@ export default function DashboardClientShell() {
 
     const ranked = sortedRows
       .map(({ item, metrics }, rankIndex) => {
+        const resolvedStrategy = bestStrategy(metrics);
         const horizonScore =
           focusKey === "swing"
             ? metrics.swing
@@ -689,15 +553,15 @@ export default function DashboardClientShell() {
             : metrics.oneYear;
         const confidenceFactor = confidenceByLabel[metrics.confidenceLabel] ?? 0.6;
         const rankFactor = Math.max(0.3, 1 - rankIndex * 0.06);
-        const executionFactor = strategyWeight(metrics.strategy);
+        const executionFactor = strategyWeight(resolvedStrategy);
         const rawWeight = Math.max(0, horizonScore / 10) * confidenceFactor * rankFactor * executionFactor;
         return {
           symbol: item.symbol,
-          strategy: metrics.strategy,
-          riskLabel: metrics.riskLabel,
+          strategy: resolvedStrategy,
+          riskLabel: engineRisk(metrics, focusKey),
           riskScore: metrics.riskScore,
           sector: inferSectorForSymbol(item.symbol),
-          vehicle: vehicleFromStrategy(metrics.strategy),
+          vehicle: vehicleFromStrategy(resolvedStrategy),
           rawWeight,
         };
       })
@@ -1286,7 +1150,7 @@ export default function DashboardClientShell() {
         </button>
 
         <span style={{ color: "#94a3b8", fontSize: 13 }}>
-          {intelligenceMessage || "Final score is the default ranking."}
+          {intelligenceMessage || "Each horizon is scored independently. Select a horizon to sort the watchlist."}
         </span>
       </div>
 
@@ -1301,12 +1165,12 @@ export default function DashboardClientShell() {
         <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
           <InfoHelp
             title="Spotlight Cards"
-            content="Spotlight only ranks Tier 1 deploy-now setups. If no symbol qualifies for Tier 1, the dashboard shows no deployable setups today."
+            content="Spotlight shows the top 3 symbols for your selected analysis horizon. This does not merge horizons into a single model."
             placement="bottom"
           />
         </div>
-        {topThree.length ? (
-          topThree.map(({ item, metrics }, index) => (
+        {spotlightRows.length ? (
+          spotlightRows.map(({ item, metrics }, index) => (
             <div
               key={item.symbol}
               onClick={() => setSelectedSymbol(item.symbol)}
@@ -1320,7 +1184,7 @@ export default function DashboardClientShell() {
               <div style={{ position: "absolute", top: 12, right: 12 }}>
                 <InfoHelp
                   title={`${item.symbol} Spotlight`}
-                  content={`This symbol is ranked in Spotlight because its final score is ${metrics.finalScore} with ${metrics.confidencePercent}% confidence. The entry zone helps you avoid chasing price.`}
+                  content={`This symbol is ranked in Spotlight because its ${HORIZON_OPTIONS.find((x) => x.key === watchlistHorizon)?.label ?? "selected"} score is ${toDisplayScore(engineScore(metrics, watchlistHorizon))}.`}
                   placement="left"
                   size={14}
                 />
@@ -1343,11 +1207,11 @@ export default function DashboardClientShell() {
                 <div
                   style={{
                     fontSize: 13,
-                    color: signalColor(metrics.swingSignal),
+                    color: signalColor(engineVerdict(metrics, watchlistHorizon)),
                     fontWeight: 800,
                   }}
                 >
-                  Swing {toDisplayScore(metrics.swing)}
+                  {HORIZON_OPTIONS.find((x) => x.key === watchlistHorizon)?.label} {toDisplayScore(engineScore(metrics, watchlistHorizon))}
                 </div>
               </div>
               <div
@@ -1637,7 +1501,7 @@ export default function DashboardClientShell() {
                 selectedMetrics.momentumToday,
                 scoreColor(selectedMetrics.momentumToday),
               ],
-              ["Final Score", selectedMetrics.finalScore, scoreColor(selectedMetrics.finalScore)],
+              ["Swing Score", toDisplayScore(selectedMetrics.swing), scoreColor(toDisplayScore(selectedMetrics.swing))],
               ["Action", selectedMetrics.strategy, "#38bdf8"],
             ].map((card) => (
               <div key={String(card[0])} style={statCardStyle()}>
@@ -1944,58 +1808,60 @@ export default function DashboardClientShell() {
           overflowX: "auto",
         }}
       >
-        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <label style={{ color: "#cbd5e1", fontSize: 13 }}>Sort Watchlist By:</label>
+            <select
+              value={watchlistHorizon}
+              onChange={(e) => setWatchlistHorizon(e.target.value as EngineKey)}
+              style={{
+                padding: "8px 10px",
+                borderRadius: 10,
+                border: "1px solid rgba(148,163,184,0.18)",
+                background: "#0f172a",
+                color: "#f8fafc",
+                fontWeight: 700,
+              }}
+            >
+              {HORIZON_OPTIONS.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
           <InfoHelp
-            title="Watchlist Tiers"
-            content="Tier 1 = Deploy Capital Now, Tier 2 = Watch or smaller size, Tier 3 = No Capital. Avoid or Extreme risk is always Tier 3."
+            title="Horizon Engines"
+            content="Swing, 3 Month, 6 Month, and 1 Year+ are independent engines with separate weights. Symbols can be Buy in one horizon and Watch in another."
             placement="bottom"
           />
         </div>
-        {watchlistBuckets.contradictions.length ? (
-          <p style={{ color: "#fca5a5", marginTop: 0, fontSize: 12 }}>
-            Hierarchy audit flagged: {watchlistBuckets.contradictions.join(" | ")}
-          </p>
-        ) : (
-          <p style={{ color: "#86efac", marginTop: 0, fontSize: 12 }}>
-            Hierarchy audit passed: no strategy/tier contradictions detected.
-          </p>
-        )}
-        {(
-          [
-            ["tier1", "Tier 1 Opportunities"],
-            ["tier2", "Tier 2 Watchlist"],
-            ["tier3", "Tier 3 Weak / Avoid"],
-          ] as const
-        ).map(([bucketKey, bucketTitle]) => (
-          <div key={bucketKey} style={{ marginBottom: 18 }}>
-            <h3 style={{ marginTop: 0, color: "#f8fafc" }}>{bucketTitle}</h3>
+
+        <div style={{ marginBottom: 18 }}>
+            <h3 style={{ marginTop: 0, color: "#f8fafc" }}>Independent Horizon Engine Watchlist</h3>
             <table
               style={{
                 width: "100%",
                 borderCollapse: "collapse",
                 fontSize: 13,
-                minWidth: 1180,
+                minWidth: 1320,
                 color: "#e2e8f0",
               }}
             >
               <thead>
                 <tr style={{ background: "rgba(30,41,59,0.72)" }}>
                   <th style={{ padding: 9, textAlign: "left" }}>Ticker</th>
-                  <th style={{ padding: 9, textAlign: "center" }}>Swing</th>
-                  <th style={{ padding: 9, textAlign: "center" }}>3M</th>
-                  <th style={{ padding: 9, textAlign: "center" }}>6M</th>
-                  <th style={{ padding: 9, textAlign: "center" }}>1Y</th>
-                  <th style={{ padding: 9, textAlign: "center" }}>Strategy</th>
-                  <th style={{ padding: 9, textAlign: "center" }}>Opp Score</th>
-                  <th style={{ padding: 9, textAlign: "center" }}>Confidence</th>
-                  <th style={{ padding: 9, textAlign: "center" }}>Risk</th>
-                  <th style={{ padding: 9, textAlign: "center" }}>Position Sizing</th>
-                  <th style={{ padding: 9, textAlign: "left" }}>Why</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Swing Score / Verdict</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>3M Score / Verdict</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>6M Score / Verdict</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>1Y+ Score / Verdict</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Best Strategy</th>
+                  <th style={{ padding: 9, textAlign: "left" }}>Risk by Timeframe</th>
                   <th style={{ padding: 9, textAlign: "center" }}>Action</th>
                 </tr>
               </thead>
               <tbody>
-                {watchlistBuckets[bucketKey].map(({ item, metrics }) => (
+                {sortedRows.map(({ item, metrics }) => (
               <tr
                 key={item.symbol}
                 style={{
@@ -2020,7 +1886,7 @@ export default function DashboardClientShell() {
                 </td>
 
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 900, color: scoreColor(toDisplayScore(metrics.swing)) }}>
-                  {toDisplayScore(metrics.swing)}
+                  {toDisplayScore(metrics.swing)} • <span style={{ color: signalColor(metrics.swingSignal) }}>{metrics.swingSignal}</span>
                 </td>
 
                 <td
@@ -2031,43 +1897,23 @@ export default function DashboardClientShell() {
                     color: scoreColor(toDisplayScore(metrics.threeMonth)),
                   }}
                 >
-                  {toDisplayScore(metrics.threeMonth)}
+                  {toDisplayScore(metrics.threeMonth)} • <span style={{ color: signalColor(metrics.threeMonthSignal) }}>{metrics.threeMonthSignal}</span>
                 </td>
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 900, color: scoreColor(toDisplayScore(metrics.sixMonth)) }}>
-                  {toDisplayScore(metrics.sixMonth)}
+                  {toDisplayScore(metrics.sixMonth)} • <span style={{ color: signalColor(metrics.sixMonthSignal) }}>{metrics.sixMonthSignal}</span>
                 </td>
 
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 900, color: scoreColor(toDisplayScore(metrics.oneYear)) }}>
-                  {toDisplayScore(metrics.oneYear)}
+                  {toDisplayScore(metrics.oneYear)} • <span style={{ color: signalColor(metrics.oneYearSignal) }}>{metrics.oneYearSignal}</span>
                 </td>
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 800 }}>
-                  {metrics.strategy}
+                  {bestStrategy(metrics)}
                 </td>
-
-                <td style={{ padding: 9, textAlign: "center", fontWeight: 900, color: scoreColor(metrics.opportunityScore) }}>
-                  {metrics.opportunityScore}
-                </td>
-                <td style={{ padding: 9, textAlign: "center", fontWeight: 900, color: scoreColor(metrics.confidencePercent) }}>
-                  {metrics.confidencePercent}
-                </td>
-                <td
-                  style={{
-                    padding: 9,
-                    textAlign: "center",
-                    fontWeight: 900,
-                    color: riskColor(metrics.riskLabel),
-                  }}
-                >
-                  {metrics.riskLabel}
-                </td>
-
-                <td style={{ padding: 9, textAlign: "center", fontWeight: 700 }}>
-                  {positionSizeForTier(bucketKey)}
-                </td>
-
-                <td style={{ padding: 9, textAlign: "left", maxWidth: 340 }}>
-                  {explainTier(metrics, watchlistBuckets.breadthRegime)}
-                  {metrics.contradictionFlags.length ? ` (${metrics.contradictionFlags.join("; ")})` : ""}
+                <td style={{ padding: 9, textAlign: "left", maxWidth: 360, fontSize: 12, lineHeight: 1.45 }}>
+                  Swing: <span style={{ color: riskColor(engineRisk(metrics, "swing")) }}>{engineRisk(metrics, "swing")}</span>
+                  {" • "}3M: <span style={{ color: riskColor(engineRisk(metrics, "threeMonth")) }}>{engineRisk(metrics, "threeMonth")}</span>
+                  {" • "}6M: <span style={{ color: riskColor(engineRisk(metrics, "sixMonth")) }}>{engineRisk(metrics, "sixMonth")}</span>
+                  {" • "}1Y+: <span style={{ color: riskColor(engineRisk(metrics, "oneYear")) }}>{engineRisk(metrics, "oneYear")}</span>
                 </td>
 
                 <td style={{ padding: 9, textAlign: "center" }}>
@@ -2090,11 +1936,10 @@ export default function DashboardClientShell() {
                 ))}
               </tbody>
             </table>
-            {!watchlistBuckets[bucketKey].length ? (
-              <p style={{ color: "#94a3b8", marginTop: 8 }}>No symbols in this bucket.</p>
+            {!sortedRows.length ? (
+              <p style={{ color: "#94a3b8", marginTop: 8 }}>No symbols in watchlist.</p>
             ) : null}
           </div>
-        ))}
       </div>
     </div>
   );
