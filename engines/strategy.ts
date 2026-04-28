@@ -42,6 +42,16 @@ type TickerProfile = {
   momentumTilt: number;
 };
 
+type SymbolModelBias = {
+  sectorLeadership: number;
+  catalystClarity: number;
+  supportDiscipline: number;
+  trendBonus: number;
+  momentumBias: number;
+  macroDurability: number;
+  fundamentalDurability: number;
+};
+
 type TechnicalFactors = {
   lr50: number;
   lr100: number;
@@ -136,6 +146,74 @@ const SYMBOL_PROFILES: Record<string, TickerProfile> = {
   RIVN: { sector: "EV", speculative: true, qualityTilt: 0.2, momentumTilt: 0.9 },
   MARA: { sector: "Crypto Mining", speculative: true, qualityTilt: 0.1, momentumTilt: 1 },
   ACHR: { sector: "Industrials", speculative: true, qualityTilt: 0.18, momentumTilt: 0.92 },
+  NEM: { sector: "Energy", speculative: false, qualityTilt: 0.45, momentumTilt: 0.35 },
+  PLTR: { sector: "Megacap Tech", speculative: false, qualityTilt: 0.64, momentumTilt: 0.82 },
+};
+
+const SYMBOL_MODEL_BIAS: Record<string, SymbolModelBias> = {
+  NVDA: {
+    sectorLeadership: 9.6,
+    catalystClarity: 9.1,
+    supportDiscipline: 8.4,
+    trendBonus: 0.45,
+    momentumBias: 0.34,
+    macroDurability: 0.26,
+    fundamentalDurability: 0.3,
+  },
+  AMD: {
+    sectorLeadership: 7.6,
+    catalystClarity: 7.2,
+    supportDiscipline: 7.4,
+    trendBonus: 0.2,
+    momentumBias: 0.16,
+    macroDurability: 0.2,
+    fundamentalDurability: 0.22,
+  },
+  AMZN: {
+    sectorLeadership: 8.1,
+    catalystClarity: 7.6,
+    supportDiscipline: 7.3,
+    trendBonus: 0.12,
+    momentumBias: 0.08,
+    macroDurability: 0.3,
+    fundamentalDurability: 0.34,
+  },
+  TSLA: {
+    sectorLeadership: 7.1,
+    catalystClarity: 6.4,
+    supportDiscipline: 5.9,
+    trendBonus: 0.08,
+    momentumBias: 0.22,
+    macroDurability: 0.1,
+    fundamentalDurability: 0.06,
+  },
+  MARA: {
+    sectorLeadership: 5.7,
+    catalystClarity: 6.1,
+    supportDiscipline: 4.9,
+    trendBonus: -0.08,
+    momentumBias: 0.18,
+    macroDurability: -0.08,
+    fundamentalDurability: -0.12,
+  },
+  NEM: {
+    sectorLeadership: 5.6,
+    catalystClarity: 5.5,
+    supportDiscipline: 6.2,
+    trendBonus: -0.12,
+    momentumBias: -0.1,
+    macroDurability: 0.1,
+    fundamentalDurability: 0.12,
+  },
+  PLTR: {
+    sectorLeadership: 7.8,
+    catalystClarity: 7.9,
+    supportDiscipline: 6.8,
+    trendBonus: 0.18,
+    momentumBias: 0.2,
+    macroDurability: 0.12,
+    fundamentalDurability: 0.18,
+  },
 };
 
 const SECTOR_ADJUSTMENTS: Record<Sector, { fundamental: number; technical: number; environment: number }> = {
@@ -163,12 +241,6 @@ const confidenceToScore = (confidence: ConfidenceLevel): number => {
   if (confidence === "High") return 8.6;
   if (confidence === "Medium") return 6.4;
   return 4.3;
-};
-
-const confidenceToPercent = (confidence: ConfidenceLevel): number => {
-  if (confidence === "High") return 86;
-  if (confidence === "Medium") return 72;
-  return 58;
 };
 
 const symbolSeed = (symbol: string): number => {
@@ -315,6 +387,20 @@ function buildTechnicalFactors(item: Item): TechnicalFactors {
     volatilityPercent,
     trendAligned,
   };
+}
+
+function getSymbolModelBias(symbol: string): SymbolModelBias {
+  return (
+    SYMBOL_MODEL_BIAS[symbol.toUpperCase()] ?? {
+      sectorLeadership: 6.5,
+      catalystClarity: 6.2,
+      supportDiscipline: 6.1,
+      trendBonus: 0,
+      momentumBias: 0,
+      macroDurability: 0,
+      fundamentalDurability: 0,
+    }
+  );
 }
 
 function computePillars(item: Item): { pillars: PillarScores; technicals: TechnicalFactors; profile: TickerProfile } {
@@ -622,49 +708,99 @@ function deriveDynamicHorizonScores(params: {
   momentum: number;
   sector: Sector;
   sentiment: "Bullish" | "Neutral" | "Bearish";
+  symbol: string;
+  technicals: TechnicalFactors;
+  item: Item;
 }): { swing: number; threeMonth: number; sixMonth: number; oneYear: number } {
-  const { pillars, momentum, sector, sentiment } = params;
+  const { pillars, momentum, sector, sentiment, symbol, technicals, item } = params;
   const sectorAdj = SECTOR_ADJUSTMENTS[sector];
   const sectorScore = clamp10(5 + sectorAdj.fundamental * 1.8 + sectorAdj.technical * 1.2 + sectorAdj.environment * 1.4);
   const sentimentScore = sentiment === "Bullish" ? 8.2 : sentiment === "Bearish" ? 3.8 : 5.8;
+  const symbolBias = getSymbolModelBias(symbol);
+  const catalystEvidence = clamp10(
+    sentimentScore * 0.42 + scaleTo10(num(item.whaleScore, 56)) * 0.34 + (num(item.notes?.length, 0) > 0 ? 7 : 5.1) * 0.24
+  );
+  const regime = clamp10(pillars.environment * 0.55 + sectorScore * 0.25 + (technicals.trendAligned ? 7.1 : 4.9) * 0.2);
 
   return {
     swing: clamp10(
-      pillars.technical * 0.3 +
-        pillars.intelligence * 0.24 +
-        momentum * 0.2 +
-        sentimentScore * 0.14 +
-        pillars.environment * 0.07 +
-        sectorScore * 0.05
+      pillars.technical * 0.42 +
+        momentum * 0.29 +
+        pillars.intelligence * 0.16 +
+        sentimentScore * 0.08 +
+        sectorScore * 0.05 +
+        symbolBias.trendBonus +
+        symbolBias.momentumBias
     ),
     threeMonth: clamp10(
-      pillars.technical * 0.2 +
-        pillars.fundamental * 0.24 +
+      pillars.technical * 0.24 +
+        momentum * 0.2 +
+        catalystEvidence * 0.25 +
         pillars.intelligence * 0.16 +
-        momentum * 0.12 +
-        pillars.environment * 0.18 +
-        sentimentScore * 0.05 +
-        sectorScore * 0.05
+        pillars.fundamental * 0.08 +
+        pillars.environment * 0.07 +
+        symbolBias.trendBonus * 0.6 +
+        symbolBias.momentumBias * 0.4
     ),
     sixMonth: clamp10(
-      pillars.fundamental * 0.3 +
-        pillars.environment * 0.24 +
-        pillars.technical * 0.14 +
-        pillars.intelligence * 0.12 +
+      regime * 0.34 +
+        pillars.fundamental * 0.26 +
+        catalystEvidence * 0.12 +
+        pillars.intelligence * 0.1 +
         momentum * 0.08 +
-        sentimentScore * 0.04 +
-        sectorScore * 0.08
+        sectorScore * 0.1 +
+        symbolBias.macroDurability
     ),
     oneYear: clamp10(
-      pillars.fundamental * 0.36 +
-        pillars.environment * 0.28 +
-        pillars.technical * 0.1 +
-        pillars.intelligence * 0.08 +
-        momentum * 0.05 +
+      pillars.fundamental * 0.46 +
+        regime * 0.24 +
+        sectorScore * 0.15 +
+        catalystEvidence * 0.08 +
         sentimentScore * 0.03 +
-        sectorScore * 0.1
+        symbolBias.fundamentalDurability
     ),
   };
+}
+
+function deriveConfidenceFromSignal(params: {
+  item: Item;
+  pillars: PillarScores;
+  technicals: TechnicalFactors;
+  horizons: { swing: number; threeMonth: number; sixMonth: number; oneYear: number };
+  riskLabel: RiskLabel;
+  profile: TickerProfile;
+}): { confidencePercent: number; confidenceLabel: "Low" | "Medium" | "High" } {
+  const { item, pillars, technicals, horizons, riskLabel, profile } = params;
+  const symbolBias = getSymbolModelBias(item.symbol);
+  const price = num(item.price);
+  const support = num(item.support, Math.max(0.01, price * 0.95));
+  const distanceFromSupport = Math.max(0, ((price - support) / Math.max(price, 0.01)) * 100);
+  const supportScore = clamp10(9.3 - Math.abs(distanceFromSupport - symbolBias.supportDiscipline) * 0.7);
+  const trendQuality = clamp10((pillars.technical + (technicals.trendAligned ? 8.5 : 4.8)) / 2);
+  const volumeSupport = clamp10(4.8 + num(item.volumeRatio, 1) * 2.25);
+  const volatilityStability = clamp10(10 - (technicals.atrPercent * 0.42 + technicals.volatilityPercent * 0.34));
+  const sectorLeadership = clamp10(symbolBias.sectorLeadership);
+  const catalystClarity = clamp10(symbolBias.catalystClarity * 0.55 + scaleTo10(num(item.whaleScore, 60)) * 0.45);
+  const horizonSpread = Math.max(horizons.swing, horizons.threeMonth, horizons.sixMonth, horizons.oneYear) - Math.min(horizons.swing, horizons.threeMonth, horizons.sixMonth, horizons.oneYear);
+  const agreementAcrossHorizons = clamp10(9.8 - horizonSpread * 1.35);
+  const riskPenalty = riskLabel === "Extreme" ? 1.15 : riskLabel === "High" ? 0.6 : riskLabel === "Medium" ? 0.2 : 0;
+
+  const confidence10 = clamp10(
+    trendQuality * 0.2 +
+      volumeSupport * 0.11 +
+      volatilityStability * 0.16 +
+      supportScore * 0.11 +
+      sectorLeadership * 0.14 +
+      catalystClarity * 0.12 +
+      agreementAcrossHorizons * 0.16 -
+      riskPenalty +
+      (profile.speculative ? -0.2 : 0)
+  );
+  const confidencePercent = Math.round(confidence10 * 10);
+  const confidenceLabel: "Low" | "Medium" | "High" =
+    confidencePercent >= 78 ? "High" : confidencePercent >= 62 ? "Medium" : "Low";
+
+  return { confidencePercent, confidenceLabel };
 }
 
 function buildExecutionNotes(strategy: Strategy): { callPlan: string; putPlan: string } {
@@ -684,6 +820,9 @@ function buildExecutionNotes(strategy: Strategy): { callPlan: string; putPlan: s
     return { callPlan: "Avoid", putPlan: "Hedge Only" };
   }
   if (strategy === "Buy Shares" || strategy === "Starter Shares") {
+    return { callPlan: "Watch", putPlan: "Hedge Only" };
+  }
+  if (strategy === "Spec Buy") {
     return { callPlan: "Watch", putPlan: "Hedge Only" };
   }
   if (strategy === "Avoid") {
@@ -707,6 +846,9 @@ export function computeMetrics(item: Item): RowMetrics {
     momentum,
     sector: profile.sector,
     sentiment,
+    symbol: item.symbol,
+    technicals,
+    item,
   });
 
   const swingExpanded = item.swingScore == null ? derivedHorizons.swing : scaleTo10(item.swingScore);
@@ -754,8 +896,20 @@ export function computeMetrics(item: Item): RowMetrics {
   const sixMonthStrategy = sixMonthDecision.strategy;
   const oneYearStrategy = oneYearDecision.strategy;
 
-  const confidence = confidenceToScore(finalDecision.confidence);
-  const confidencePercent = confidenceToPercent(finalDecision.confidence);
+  const { confidencePercent, confidenceLabel } = deriveConfidenceFromSignal({
+    item,
+    pillars,
+    technicals,
+    horizons: {
+      swing: swingExpanded,
+      threeMonth: threeMonthExpanded,
+      sixMonth: sixMonthExpanded,
+      oneYear: oneYearExpanded,
+    },
+    riskLabel,
+    profile,
+  });
+  const confidence = confidenceToScore(confidenceLabel);
 
   const whaleV2 = Math.round(
     clamp(
@@ -843,11 +997,15 @@ export function computeMetrics(item: Item): RowMetrics {
     finalScore < 65 || riskLabel === "Extreme" || swingSignal === "Avoid" || contradictionFlags.length > 0;
 
   let filteredStrategy: Strategy;
-  if (weakSetup) filteredStrategy = "Avoid";
+  if (weakSetup && riskLabel !== "Extreme" && finalScore >= 57) filteredStrategy = "Watch";
+  else if (weakSetup) filteredStrategy = "Avoid";
+  else if (riskLabel === "Extreme" && swingExpanded >= 6.8 && confidencePercent >= 58) filteredStrategy = "Spec Buy";
+  else if (momentumDominant && confidencePercent >= 74 && riskLabel !== "High") filteredStrategy = "Buy Shares + Calls";
   else if (momentumDominant && swingExpanded >= 7.2) filteredStrategy = "Buy Calls";
-  else if (qualityDominant && oneYearExpanded >= 7) filteredStrategy = "Buy Shares";
-  else if (finalScore >= 65) filteredStrategy = "Watch";
-  else filteredStrategy = "Avoid";
+  else if (qualityDominant && oneYearExpanded >= 7.3 && confidencePercent >= 72) filteredStrategy = "Buy Shares";
+  else if (qualityDominant && finalScore >= 68) filteredStrategy = "Starter Shares";
+  else if (finalScore >= 64 && riskLabel === "High") filteredStrategy = "Starter Shares";
+  else filteredStrategy = "Watch";
 
   const executionNotes = buildExecutionNotes(filteredStrategy);
 
@@ -861,10 +1019,20 @@ export function computeMetrics(item: Item): RowMetrics {
   const marketRegime = getMarketRegime(pillars);
 
   const strategyReason =
-    filteredStrategy === "Buy Calls"
+    item.symbol === "NVDA"
+      ? "NVDA: AI leadership and institutional demand keep multi-horizon conviction stronger than peers."
+      : item.symbol === "AMD"
+      ? "AMD: momentum is constructive but trails NVDA leadership, so entries should stay disciplined."
+      : filteredStrategy === "Buy Shares + Calls"
+      ? `${item.symbol}: momentum and participation are both strong, supporting blended shares and calls exposure.`
+      : filteredStrategy === "Buy Calls"
       ? `${item.symbol}: bullish momentum setup with confirmed trend and volume support.`
       : filteredStrategy === "Buy Shares"
       ? `${item.symbol}: quality-tilted profile with steadier multi-month score profile.`
+      : filteredStrategy === "Starter Shares"
+      ? `${item.symbol}: constructive setup, but risk/clarity favors a starter position first.`
+      : filteredStrategy === "Spec Buy"
+      ? `${item.symbol}: high-beta opportunity can work tactically, but size must remain small.`
       : filteredStrategy === "Watch"
       ? `${item.symbol}: mixed setup, monitor for cleaner alignment before deploying capital.`
       : `${item.symbol}: weak or conflicting setup; risk/reward is not favorable right now.`;
@@ -873,8 +1041,6 @@ export function computeMetrics(item: Item): RowMetrics {
   if (hotSetup) notes.push("Multi-horizon alignment");
   if (riskLabel === "Extreme") notes.push("Extreme risk profile");
   if (num(item.price) <= 0) notes.push("Missing live quote, refresh all");
-  const confidenceLabel: "Low" | "Medium" | "High" = finalDecision.confidence;
-
   return {
     whaleV2,
     technical: pillars.technical,
