@@ -12,6 +12,7 @@ import { computeMetrics, type RowMetrics } from "@/engines/strategy";
 import { supabase } from "@/app/lib/supabase";
 import { num, upper } from "@/app/lib/helpers";
 import type { IntelligenceApiResponse } from "@/lib/intelligence/types";
+import { mapItemToWatchlistRow, mapWatchlistRowToItem } from "@/lib/watchlist/dbMapper";
 import InfoHelp from "@/components/ui/InfoHelp";
 
 type ChartRange = "1D" | "5D" | "1M";
@@ -137,6 +138,23 @@ function toDisplayScore(score: number): number {
   return Math.round(num(score) * 10);
 }
 
+function explainTier(metrics: RowMetrics): string {
+  if (metrics.opportunityScore >= 80) {
+    return "Tier 1: strong swing momentum, sector leadership, and positive catalyst alignment.";
+  }
+
+  if (metrics.opportunityScore >= 65) {
+    return "Tier 2: setup is tradable but needs better score confirmation before Tier 1 status.";
+  }
+
+  const contradictionNote =
+    metrics.swing >= 8 && metrics.threeMonth >= 8
+      ? " Explicit downgrade: short-term strength is offset by weak broader structure and poor reward/risk."
+      : "";
+
+  return `Tier 3: weak trend, conflicting signals, or poor reward/risk profile.${contradictionNote}`;
+}
+
 function inferSectorForSymbol(symbol: string): string {
   const upperSymbol = symbol.toUpperCase();
   if (["NVDA", "AMD", "MRVL", "AVGO", "TSM"].includes(upperSymbol)) return "Semiconductors";
@@ -172,77 +190,6 @@ const pickDefaultSymbol = (entries: Item[], persistedSymbol?: string | null): st
     ""
   );
 };
-
-const mapWatchlistRowToItem = (row: Record<string, unknown>): Item => {
-  const getValue = (...keys: string[]) => {
-    for (const key of keys) {
-      if (row[key] !== undefined) return row[key];
-    }
-    return undefined;
-  };
-
-  const toOptionalNumber = (...keys: string[]) => {
-    const value = getValue(...keys);
-    return value === undefined ? undefined : num(value);
-  };
-
-  const rawBias = row.bias;
-  const bias: Item["bias"] =
-    rawBias === "Bullish" || rawBias === "Bearish" || rawBias === "Watch"
-      ? rawBias
-      : "Watch";
-
-  return {
-    symbol: typeof row.symbol === "string" ? row.symbol : "",
-    bias,
-    price: num(getValue("price", "last_price")),
-    swingScore: toOptionalNumber("swingScore", "swing_score"),
-    threeMonthScore: toOptionalNumber("threeMonthScore", "three_month_score"),
-    sixMonthScore: toOptionalNumber("sixMonthScore", "six_month_score"),
-    oneYearScore: toOptionalNumber("oneYearScore", "one_year_score"),
-    support: num(getValue("support")),
-    resistance: num(getValue("resistance")),
-    rsi: num(getValue("rsi"), 50),
-    volumeRatio: num(getValue("volumeRatio", "volume_ratio"), 1),
-    technicalScore: num(getValue("technicalScore", "technical_score", "tech"), 70),
-    whaleScore: num(getValue("whaleScore", "whale_score", "intel"), 60),
-    macroScore: num(getValue("macroScore", "macro_score"), 60),
-    politicalScore: num(getValue("politicalScore", "political_score", "env"), 60),
-    lr50: toOptionalNumber("lr50", "lr_50"),
-    lr50Slope: toOptionalNumber("lr50Slope", "lr_50_slope"),
-    lr100: toOptionalNumber("lr100", "lr_100"),
-    lr100Slope: toOptionalNumber("lr100Slope", "lr_100_slope"),
-    fibSupport: toOptionalNumber("fibSupport", "fib_support"),
-    fibResistance: toOptionalNumber("fibResistance", "fib_resistance"),
-    atrPercent: toOptionalNumber("atrPercent", "atr_percent"),
-    betaProxy: toOptionalNumber("betaProxy", "beta_proxy"),
-    priceVolatility: toOptionalNumber("priceVolatility", "price_volatility"),
-    ivPercentile: toOptionalNumber("ivPercentile", "iv_percentile"),
-    earningsDays: toOptionalNumber("earningsDays", "earnings_days"),
-    notes: Array.isArray(row.notes)
-      ? row.notes.filter((note): note is string => typeof note === "string")
-      : [],
-  };
-};
-
-const toWatchlistRow = (row: Item) => ({
-  symbol: row.symbol,
-  bias: row.bias,
-  price: row.price,
-  swing_score: row.swingScore,
-  three_month_score: row.threeMonthScore,
-  six_month_score: row.sixMonthScore,
-  one_year_score: row.oneYearScore,
-  support: row.support,
-  resistance: row.resistance,
-  rsi: row.rsi,
-  volume_ratio: row.volumeRatio,
-  technical_score: row.technicalScore,
-  whale_score: row.whaleScore,
-  macro_score: row.macroScore,
-  political_score: row.politicalScore,
-  notes: row.notes,
-});
 
 const HORIZON_FIELD_MAP: Record<HorizonKey, keyof Pick<Item, "swingScore" | "threeMonthScore" | "sixMonthScore" | "oneYearScore">> =
   {
@@ -481,7 +428,9 @@ export default function DashboardClientShell() {
 
   const watchlistBuckets = useMemo(() => {
     const sorted = [...rows].sort((a, b) => {
-      if (b.metrics.finalScore !== a.metrics.finalScore) return b.metrics.finalScore - a.metrics.finalScore;
+      if (b.metrics.opportunityScore !== a.metrics.opportunityScore) {
+        return b.metrics.opportunityScore - a.metrics.opportunityScore;
+      }
       if (b.metrics.confidencePercent !== a.metrics.confidencePercent) {
         return b.metrics.confidencePercent - a.metrics.confidencePercent;
       }
@@ -489,14 +438,9 @@ export default function DashboardClientShell() {
     });
 
     return {
-      high: sorted.filter(
-        (row) =>
-          row.metrics.finalScore >= 80 &&
-          row.metrics.confidencePercent >= 70 &&
-          row.metrics.contradictionFlags.length === 0
-      ),
-      medium: sorted.filter((row) => row.metrics.finalScore >= 65 && row.metrics.finalScore <= 79),
-      low: sorted.filter((row) => row.metrics.finalScore < 65 || row.metrics.contradictionFlags.length > 0),
+      tier1: sorted.filter((row) => row.metrics.opportunityScore >= 80),
+      tier2: sorted.filter((row) => row.metrics.opportunityScore >= 65 && row.metrics.opportunityScore <= 79),
+      tier3: sorted.filter((row) => row.metrics.opportunityScore < 65),
     };
   }, [rows]);
 
@@ -673,7 +617,7 @@ export default function DashboardClientShell() {
 
       const { error } = await supabase
         .from("watchlist")
-        .insert([toWatchlistRow(row)]);
+        .insert([mapItemToWatchlistRow(row)]);
 
       if (error) {
         setItems(previousItems);
@@ -844,7 +788,7 @@ export default function DashboardClientShell() {
 
     const { error } = await supabase.from("watchlist").upsert(
       rows.map((row) => ({
-        ...toWatchlistRow(row),
+        ...mapItemToWatchlistRow(row),
       })),
       { onConflict: "symbol" }
     );
@@ -1800,16 +1744,16 @@ export default function DashboardClientShell() {
       >
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
           <InfoHelp
-            title="Watchlist Buckets"
-            content="High Confidence requires final score >= 80, confidence >= 70, and no contradiction flags. Medium is 65-79. Low is under 65 or contains contradictory signals."
+            title="Watchlist Tiers"
+            content="Tier assignment is based only on Opportunity Score: Tier 1 is >= 80, Tier 2 is 65-79, and Tier 3 is < 65. Risk and confidence remain separate columns and never directly force tier placement."
             placement="bottom"
           />
         </div>
         {(
           [
-            ["high", "High Confidence"],
-            ["medium", "Medium"],
-            ["low", "Low"],
+            ["tier1", "Tier 1 Opportunities"],
+            ["tier2", "Tier 2 Watchlist"],
+            ["tier3", "Tier 3 Weak / Avoid"],
           ] as const
         ).map(([bucketKey, bucketTitle]) => (
           <div key={bucketKey} style={{ marginBottom: 18 }}>
@@ -1831,8 +1775,9 @@ export default function DashboardClientShell() {
                   <th style={{ padding: 9, textAlign: "center" }}>6M</th>
                   <th style={{ padding: 9, textAlign: "center" }}>1Y</th>
                   <th style={{ padding: 9, textAlign: "center" }}>Strategy</th>
-                  <th style={{ padding: 9, textAlign: "center" }}>Risk Label</th>
-                  <th style={{ padding: 9, textAlign: "center" }}>Final Score</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Opp Score</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Confidence</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Risk</th>
                   <th style={{ padding: 9, textAlign: "left" }}>Why</th>
                   <th style={{ padding: 9, textAlign: "center" }}>Action</th>
                 </tr>
@@ -1887,6 +1832,12 @@ export default function DashboardClientShell() {
                   {metrics.strategy}
                 </td>
 
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 900 }}>
+                  {metrics.opportunityScore}
+                </td>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 900 }}>
+                  {metrics.confidencePercent}
+                </td>
                 <td
                   style={{
                     padding: 9,
@@ -1897,12 +1848,9 @@ export default function DashboardClientShell() {
                 >
                   {metrics.riskLabel}
                 </td>
-                <td style={{ padding: 9, textAlign: "center", fontWeight: 900 }}>
-                  {metrics.finalScore}
-                </td>
 
-                <td style={{ padding: 9, textAlign: "left", maxWidth: 260 }}>
-                  {metrics.reason}
+                <td style={{ padding: 9, textAlign: "left", maxWidth: 340 }}>
+                  {explainTier(metrics)} {metrics.reason}
                   {metrics.contradictionFlags.length ? ` (${metrics.contradictionFlags.join("; ")})` : ""}
                 </td>
 

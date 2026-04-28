@@ -3,17 +3,18 @@ import { getBestSignals, getModulePerformance, logSignal } from "@/lib/intellige
 import { routeExecutionStrategy } from "@/lib/execution/router";
 import { logExecutionSignal } from "@/lib/execution/performance";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { WATCHLIST_MARKET_CONTEXT_SELECT } from "@/lib/watchlist/dbMapper";
 import type { AnalysisHorizon, IntelligenceApiResponse, IntelligenceSymbolSummary, MarketContextSnapshot } from "@/lib/intelligence/types";
 
 interface WatchlistRow {
   symbol: string;
-  technicalScore: number | null;
-  macroScore: number | null;
-  politicalScore: number | null;
+  technical_score: number | null;
+  macro_score: number | null;
+  political_score: number | null;
   rsi: number | null;
-  volumeRatio: number | null;
-  priceVolatility: number | null;
-  earningsDays: number | null;
+  volume_ratio: number | null;
+  price_volatility: number | null;
+  earnings_days: number | null;
   price: number | null;
   sector: string | null;
 }
@@ -143,9 +144,7 @@ async function buildMarketContext(symbols: string[]): Promise<Record<string, Mar
   const [watchlistRes, flowRes, newsRes] = await Promise.all([
     supabase
       .from("watchlist")
-      .select(
-        "symbol, technicalScore, macroScore, politicalScore, rsi, volumeRatio, priceVolatility, earningsDays, price, sector"
-      )
+      .select(WATCHLIST_MARKET_CONTEXT_SELECT)
       .in("symbol", symbols),
     supabase.from("flow_events").select("symbol, score").in("symbol", symbols),
     supabase.from("news_events").select("symbol, sentiment_score").in("symbol", symbols),
@@ -178,12 +177,12 @@ async function buildMarketContext(symbols: string[]): Promise<Record<string, Mar
   return watchRows.reduce<Record<string, MarketContextSnapshot>>((acc, row) => {
     const sector = resolveSector(row.symbol, row.sector);
     const sectorDefaults = SECTOR_CONTEXT_FALLBACK[sector ?? ""] ?? SECTOR_CONTEXT_FALLBACK.__DEFAULT__;
-    const technical = toScore10(n(row.technicalScore, sectorDefaults.technical));
-    const macro = toScore10(n(row.macroScore, sectorDefaults.macro));
-    const political = toScore10(n(row.politicalScore, sectorDefaults.political));
+    const technical = toScore10(n(row.technical_score, sectorDefaults.technical));
+    const macro = toScore10(n(row.macro_score, sectorDefaults.macro));
+    const political = toScore10(n(row.political_score, sectorDefaults.political));
     const rsi = n(row.rsi, 50);
-    const volumeRatio = n(row.volumeRatio, 1);
-    const volatility = n(row.priceVolatility, sectorDefaults.volatility);
+    const volumeRatio = n(row.volume_ratio, 1);
+    const volatility = n(row.price_volatility, sectorDefaults.volatility);
     const flowScore = toScore10(avg(flowMap[row.symbol] ?? [], sectorDefaults.flow));
     const newsSentiment = toScore10(avg(newsMap[row.symbol] ?? [], sectorDefaults.news));
 
@@ -194,7 +193,7 @@ async function buildMarketContext(symbols: string[]): Promise<Record<string, Mar
       technicalScore: technical,
       macroScore: macro,
       politicalScore: political,
-      earningsDays: row.earningsDays == null ? null : Number(row.earningsDays),
+      earningsDays: row.earnings_days == null ? null : Number(row.earnings_days),
       newsSentiment,
       flowScore,
       volatility,
