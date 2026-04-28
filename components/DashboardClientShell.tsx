@@ -158,6 +158,11 @@ function toDisplayScore(score: number): number {
   return Math.round(num(score) * 10);
 }
 
+const formatPrice = (value: number | null | undefined) => {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  return `$${value.toFixed(2)}`;
+};
+
 
 
 function engineScore(metrics: RowMetrics, engine: EngineKey): number {
@@ -260,6 +265,7 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
   const support = num(item.support, price > 0 ? price * 0.96 : 0);
   const resistance = num(item.resistance, price > 0 ? price * 1.06 : support + 1);
   const validResistance = resistance > support ? resistance : support + Math.max(0.5, support * 0.03);
+  const safeResistance = validResistance ?? price * 1.02;
   const width = Math.max(validResistance - support, Math.max(price * 0.03, 0.5));
 
   const isExtended = price > 0 && price > validResistance * 1.01;
@@ -267,17 +273,17 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
   const state: ActionState = isBreakdown ? "Breakdown" : isExtended ? "Extended" : score >= 78 ? "Ready" : score >= 70 ? "Setup" : "Breakdown";
   const confirmationCondition =
     state === "Setup"
-      ? `Require confirmation: reclaim and hold above ${formatPrice(validResistance)} with volume > 1.2x.`
+      ? `Require confirmation: reclaim and hold above ${formatPrice(safeResistance)} with volume > 1.2x.`
       : "No extra confirmation required.";
 
   const entryTrigger =
     state === "Extended"
-      ? `Do not chase. Wait for pullback into ${formatPrice(Math.max(support, validResistance - width * 0.25))} - ${formatPrice(validResistance)} before entering.`
+      ? `Do not chase. Wait for pullback into ${formatPrice(Math.max(support, safeResistance - width * 0.25))} - ${formatPrice(safeResistance)} before entering.`
       : state === "Breakdown"
       ? `Breakdown active below ${formatPrice(support)}. Avoid longs; only act on weak bounces into ${formatPrice(support)}.`
       : state === "Ready"
-      ? `Enter on hold above ${formatPrice(validResistance)} or pullback support hold near ${formatPrice(support + width * 0.2)}.`
-      : `Staging only: probe near ${formatPrice(support + width * 0.2)} and add only after breakout above ${formatPrice(validResistance)}.`;
+      ? `Enter on hold above ${formatPrice(safeResistance)} or pullback support hold near ${formatPrice(support + width * 0.2)}.`
+      : `Staging only: probe near ${formatPrice(support + width * 0.2)} and add only after breakout above ${formatPrice(safeResistance)}.`;
 
   const stopLoss =
     state === "Breakdown" ? formatPrice(support + width * 0.08) : formatPrice(Math.max(support - width * 0.18, price * 0.82));
