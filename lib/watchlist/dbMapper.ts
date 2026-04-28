@@ -25,7 +25,6 @@ const WATCHLIST_DB_FIELD_MAP = {
   lr100Slope: ["lr_100_slope", "lr100Slope"],
   fibSupport: ["fib_support", "fibSupport"],
   fibResistance: ["fib_resistance", "fibResistance"],
-  atrPercent: ["atr_percent", "atrPercent"],
   betaProxy: ["beta_proxy", "betaProxy"],
   priceVolatility: ["price_volatility", "priceVolatility"],
   ivPercentile: ["iv_percentile", "ivPercentile"],
@@ -44,22 +43,32 @@ function toOptionalNumber(value: unknown): number | undefined {
   return value === undefined ? undefined : num(value);
 }
 
+function deriveAtrPercent(price: number, support: number, resistance: number): number {
+  const safePrice = Math.max(0.01, num(price, 0));
+  const width = Math.max(0, num(resistance, 0) - num(support, 0));
+  return Number(((width / safePrice) * 100).toFixed(4));
+}
+
 export function mapWatchlistRowToItem(row: WatchlistDbRow): Item {
   const rawSymbol = pickFirst(row, WATCHLIST_DB_FIELD_MAP.symbol);
   const rawBias = pickFirst(row, WATCHLIST_DB_FIELD_MAP.bias);
   const bias: Item["bias"] =
     rawBias === "Bullish" || rawBias === "Bearish" || rawBias === "Watch" ? rawBias : "Watch";
 
+  const price = num(pickFirst(row, WATCHLIST_DB_FIELD_MAP.price));
+  const support = num(pickFirst(row, WATCHLIST_DB_FIELD_MAP.support));
+  const resistance = num(pickFirst(row, WATCHLIST_DB_FIELD_MAP.resistance));
+
   return {
     symbol: typeof rawSymbol === "string" ? rawSymbol : "",
     bias,
-    price: num(pickFirst(row, WATCHLIST_DB_FIELD_MAP.price)),
+    price,
     swingScore: toOptionalNumber(pickFirst(row, WATCHLIST_DB_FIELD_MAP.swingScore)),
     threeMonthScore: toOptionalNumber(pickFirst(row, WATCHLIST_DB_FIELD_MAP.threeMonthScore)),
     sixMonthScore: toOptionalNumber(pickFirst(row, WATCHLIST_DB_FIELD_MAP.sixMonthScore)),
     oneYearScore: toOptionalNumber(pickFirst(row, WATCHLIST_DB_FIELD_MAP.oneYearScore)),
-    support: num(pickFirst(row, WATCHLIST_DB_FIELD_MAP.support)),
-    resistance: num(pickFirst(row, WATCHLIST_DB_FIELD_MAP.resistance)),
+    support,
+    resistance,
     rsi: num(pickFirst(row, WATCHLIST_DB_FIELD_MAP.rsi), 50),
     volumeRatio: num(pickFirst(row, WATCHLIST_DB_FIELD_MAP.volumeRatio), 1),
     technicalScore: num(pickFirst(row, WATCHLIST_DB_FIELD_MAP.technicalScore), 70),
@@ -72,7 +81,7 @@ export function mapWatchlistRowToItem(row: WatchlistDbRow): Item {
     lr100Slope: toOptionalNumber(pickFirst(row, WATCHLIST_DB_FIELD_MAP.lr100Slope)),
     fibSupport: toOptionalNumber(pickFirst(row, WATCHLIST_DB_FIELD_MAP.fibSupport)),
     fibResistance: toOptionalNumber(pickFirst(row, WATCHLIST_DB_FIELD_MAP.fibResistance)),
-    atrPercent: toOptionalNumber(pickFirst(row, WATCHLIST_DB_FIELD_MAP.atrPercent)),
+    atrPercent: deriveAtrPercent(price, support, resistance),
     betaProxy: toOptionalNumber(pickFirst(row, WATCHLIST_DB_FIELD_MAP.betaProxy)),
     priceVolatility: toOptionalNumber(pickFirst(row, WATCHLIST_DB_FIELD_MAP.priceVolatility)),
     ivPercentile: toOptionalNumber(pickFirst(row, WATCHLIST_DB_FIELD_MAP.ivPercentile)),
@@ -85,7 +94,40 @@ export function mapWatchlistRowToItem(row: WatchlistDbRow): Item {
   };
 }
 
-export function mapItemToWatchlistRow(row: Item) {
+export const WATCHLIST_PERSISTED_FIELDS = [
+  "symbol",
+  "bias",
+  "price",
+  "swing_score",
+  "three_month_score",
+  "six_month_score",
+  "one_year_score",
+  "support",
+  "resistance",
+  "rsi",
+  "volume_ratio",
+  "technical_score",
+  "whale_score",
+  "macro_score",
+  "political_score",
+  "price_volatility",
+  "earnings_days",
+  "notes",
+] as const;
+
+export const WATCHLIST_RUNTIME_ONLY_FIELDS = [
+  "lr50",
+  "lr50Slope",
+  "lr100",
+  "lr100Slope",
+  "fibSupport",
+  "fibResistance",
+  "atrPercent",
+  "betaProxy",
+  "ivPercentile",
+] as const;
+
+export function mapItemToWatchlistPersistedRow(row: Item) {
   return {
     symbol: row.symbol,
     bias: row.bias,
@@ -102,16 +144,7 @@ export function mapItemToWatchlistRow(row: Item) {
     whale_score: row.whaleScore,
     macro_score: row.macroScore,
     political_score: row.politicalScore,
-    lr_50: row.lr50,
-    lr_50_slope: row.lr50Slope,
-    lr_100: row.lr100,
-    lr_100_slope: row.lr100Slope,
-    fib_support: row.fibSupport,
-    fib_resistance: row.fibResistance,
-    atr_percent: row.atrPercent,
-    beta_proxy: row.betaProxy,
     price_volatility: row.priceVolatility,
-    iv_percentile: row.ivPercentile,
     earnings_days: row.earningsDays,
     notes: row.notes,
   };
