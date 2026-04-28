@@ -1,9 +1,11 @@
+import type { RiskLabel } from "../../types/dashboard";
+
 export type HorizonKey = "swing" | "threeMonth" | "sixMonth" | "oneYear";
 
 export type AnalysisHorizon = HorizonKey;
 
 export type ConfidenceLevel = "High" | "Medium" | "Low";
-export type RiskLevel = "Low" | "Medium" | "High" | "Extreme";
+export type RiskLevel = RiskLabel;
 export type RatingLabel = "Strong Buy" | "Buy" | "Watch" | "Neutral" | "Avoid" | "Strong Avoid";
 export type StrategyRecommendation =
   | "Buy Shares"

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type {
   Item,
+  RiskLabel,
   Strategy,
   QuoteResponse,
   SentimentResponse,
@@ -62,7 +63,7 @@ function signalColor(signal: string) {
   return "#ef4444";
 }
 
-function riskColor(risk: "Unknown" | "Low" | "Medium" | "High" | "Extreme") {
+function riskColor(risk: "Unknown" | RiskLabel) {
   if (risk === "Unknown") return "#94a3b8";
   if (risk === "Low") return "#22c55e";
   if (risk === "Medium") return "#f59e0b";
