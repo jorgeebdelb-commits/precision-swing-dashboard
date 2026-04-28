@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type {
   Item,
-  HorizonKey,
   Strategy,
   QuoteResponse,
   SentimentResponse,
@@ -12,7 +11,11 @@ import { computeMetrics, type RowMetrics } from "@/engines/strategy";
 import { supabase } from "@/app/lib/supabase";
 import { num, upper } from "@/app/lib/helpers";
 import type { IntelligenceApiResponse } from "@/lib/intelligence/types";
-import { mapItemToWatchlistPersistedRow, mapWatchlistRowToItem } from "@/lib/watchlist/dbMapper";
+import {
+  mapIntelligenceSummaryToRuntime,
+  mapItemToWatchlistPersistedRow,
+  mapWatchlistRowToItem,
+} from "@/lib/watchlist/dbMapper";
 import InfoHelp from "@/components/ui/InfoHelp";
 
 type ChartRange = "1D" | "5D" | "1M";
@@ -279,14 +282,6 @@ const pickDefaultSymbol = (entries: Item[], persistedSymbol?: string | null): st
   );
 };
 
-const HORIZON_FIELD_MAP: Record<HorizonKey, keyof Pick<Item, "swingScore" | "threeMonthScore" | "sixMonthScore" | "oneYearScore">> =
-  {
-    swing: "swingScore",
-    threeMonth: "threeMonthScore",
-    sixMonth: "sixMonthScore",
-    oneYear: "oneYearScore",
-  };
-
 function strategyToBias(strategy: Strategy): Item["bias"] {
   if (strategy === "Avoid" || strategy === "Buy Puts") return "Bearish";
   if (
@@ -299,6 +294,30 @@ function strategyToBias(strategy: Strategy): Item["bias"] {
     return "Bullish";
   }
   return "Watch";
+}
+
+function mergeWatchlistWithIntelligence(baseRows: Record<string, unknown>[], intelligence: IntelligenceApiResponse): Item[] {
+  const runtimeBySymbol = new Map(
+    intelligence.items.map((summary) => {
+      const runtime = mapIntelligenceSummaryToRuntime(summary);
+      return [
+        summary.symbol,
+        {
+          ...runtime,
+          bias: strategyToBias((summary.executionStrategy as Strategy) ?? summary.analyses[0]?.strategy ?? "Watch"),
+        },
+      ];
+    })
+  );
+
+  return baseRows
+    .map((row) => {
+      const symbol = typeof row.symbol === "string" ? row.symbol : "";
+      const runtime = symbol ? runtimeBySymbol.get(symbol) : undefined;
+      const mapped = mapWatchlistRowToItem(row, runtime);
+      return runtime?.bias ? { ...mapped, bias: runtime.bias } : mapped;
+    })
+    .filter((item) => item.symbol);
 }
 
 export default function DashboardClientShell() {
@@ -380,9 +399,19 @@ export default function DashboardClientShell() {
           return;
         }
 
-        const mapped: Item[] = (data ?? [])
-          .map((row: Record<string, unknown>) => mapWatchlistRowToItem(row))
-          .filter((item) => item.symbol);
+        const dbRows = (data ?? []) as Record<string, unknown>[];
+        const symbols = dbRows
+          .map((row) => (typeof row.symbol === "string" ? row.symbol : ""))
+          .filter(Boolean);
+        let mapped: Item[] = dbRows.map((row) => mapWatchlistRowToItem(row)).filter((item) => item.symbol);
+
+        if (symbols.length) {
+          const intelligenceRes = await fetch(`/api/intelligence?symbols=${encodeURIComponent(symbols.join(","))}`);
+          if (intelligenceRes.ok) {
+            const intelligence = (await intelligenceRes.json()) as IntelligenceApiResponse;
+            mapped = mergeWatchlistWithIntelligence(dbRows, intelligence);
+          }
+        }
 
         setItems(mapped);
         setSelectedSymbol(pickDefaultSymbol(mapped, persistedSymbol));
@@ -931,16 +960,11 @@ export default function DashboardClientShell() {
           (nextItems = prev.map((row) => {
             const summary = symbolMap.get(row.symbol);
             if (!summary) return row;
-
-            const updates: Partial<Item> = {};
-            for (const analysis of summary.analyses) {
-              const key = HORIZON_FIELD_MAP[analysis.horizon];
-              updates[key] = Number(analysis.score.toFixed(2));
-            }
+            const runtime = mapIntelligenceSummaryToRuntime(summary);
 
             return {
               ...row,
-              ...updates,
+              ...runtime,
               bias: strategyToBias((summary.executionStrategy as Strategy) ?? summary.analyses[0]?.strategy ?? "Watch"),
             };
           }))

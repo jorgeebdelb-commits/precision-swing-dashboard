@@ -8,15 +8,7 @@ import type { AnalysisHorizon, IntelligenceApiResponse, IntelligenceSymbolSummar
 
 interface WatchlistRow {
   symbol: string;
-  technical_score: number | null;
-  macro_score: number | null;
-  political_score: number | null;
-  rsi: number | null;
-  volume_ratio: number | null;
-  price_volatility: number | null;
-  earnings_days: number | null;
-  price: number | null;
-  sector: string | null;
+  user_tags?: string[] | null;
 }
 
 interface FlowEventRow {
@@ -33,11 +25,6 @@ interface CacheRow {
   symbol: string;
   payload: IntelligenceApiResponse;
   generated_at: string;
-}
-
-function n(value: number | null | undefined, fallback: number): number {
-  if (value == null || Number.isNaN(value)) return fallback;
-  return Number(value);
 }
 
 function avg(values: number[], fallback: number): number {
@@ -175,25 +162,28 @@ async function buildMarketContext(symbols: string[]): Promise<Record<string, Mar
   }, {});
 
   return watchRows.reduce<Record<string, MarketContextSnapshot>>((acc, row) => {
-    const sector = resolveSector(row.symbol, row.sector);
+    const tagSector = Array.isArray(row.user_tags)
+      ? row.user_tags.find((tag) => typeof tag === "string" && tag.startsWith("sector:"))?.replace("sector:", "")
+      : null;
+    const sector = resolveSector(row.symbol, tagSector ?? null);
     const sectorDefaults = SECTOR_CONTEXT_FALLBACK[sector ?? ""] ?? SECTOR_CONTEXT_FALLBACK.__DEFAULT__;
-    const technical = toScore10(n(row.technical_score, sectorDefaults.technical));
-    const macro = toScore10(n(row.macro_score, sectorDefaults.macro));
-    const political = toScore10(n(row.political_score, sectorDefaults.political));
-    const rsi = n(row.rsi, 50);
-    const volumeRatio = n(row.volume_ratio, 1);
-    const volatility = n(row.price_volatility, sectorDefaults.volatility);
+    const technical = toScore10(sectorDefaults.technical);
+    const macro = toScore10(sectorDefaults.macro);
+    const political = toScore10(sectorDefaults.political);
+    const rsi = 50;
+    const volumeRatio = 1;
+    const volatility = sectorDefaults.volatility;
     const flowScore = toScore10(avg(flowMap[row.symbol] ?? [], sectorDefaults.flow));
     const newsSentiment = toScore10(avg(newsMap[row.symbol] ?? [], sectorDefaults.news));
 
     acc[row.symbol] = {
-      price: n(row.price, 0),
+      price: 0,
       rsi,
       volumeRatio,
       technicalScore: technical,
       macroScore: macro,
       politicalScore: political,
-      earningsDays: row.earnings_days == null ? null : Number(row.earnings_days),
+      earningsDays: null,
       newsSentiment,
       flowScore,
       volatility,
