@@ -12,7 +12,7 @@ import { computeMetrics, type RowMetrics } from "@/engines/strategy";
 import { supabase } from "@/app/lib/supabase";
 import { num, upper } from "@/app/lib/helpers";
 import type { IntelligenceApiResponse } from "@/lib/intelligence/types";
-import { mapItemToWatchlistRow, mapWatchlistRowToItem } from "@/lib/watchlist/dbMapper";
+import { mapItemToWatchlistPersistedRow, mapWatchlistRowToItem } from "@/lib/watchlist/dbMapper";
 import InfoHelp from "@/components/ui/InfoHelp";
 
 type ChartRange = "1D" | "5D" | "1M";
@@ -717,7 +717,7 @@ export default function DashboardClientShell() {
 
       const { error } = await supabase
         .from("watchlist")
-        .insert([mapItemToWatchlistRow(row)]);
+        .insert([mapItemToWatchlistPersistedRow(row)]);
 
       if (error) {
         setItems(previousItems);
@@ -888,7 +888,7 @@ export default function DashboardClientShell() {
 
     const { error } = await supabase.from("watchlist").upsert(
       rows.map((row) => ({
-        ...mapItemToWatchlistRow(row),
+        ...mapItemToWatchlistPersistedRow(row),
       })),
       { onConflict: "symbol" }
     );
