@@ -1,25 +1,9 @@
 import type { Item } from "@/types/dashboard";
 import { num } from "@/app/lib/helpers";
 import type { IntelligenceSymbolSummary } from "@/lib/intelligence/types";
+import type { WatchlistInsert, WatchlistRow } from "@/lib/watchlist/schema";
 
-type WatchlistDbRow = Record<string, unknown>;
-
-const WATCHLIST_DB_FIELD_MAP = {
-  id: ["id"],
-  createdAt: ["created_at"],
-  symbol: ["symbol"],
-  manualBias: ["manual_bias", "bias"],
-  favorite: ["favorite"],
-  userTags: ["user_tags"],
-  notes: ["notes"],
-} as const;
-
-function pickFirst(row: WatchlistDbRow, keys: readonly string[]): unknown {
-  for (const key of keys) {
-    if (row[key] !== undefined) return row[key];
-  }
-  return undefined;
-}
+type WatchlistDbRow = Partial<WatchlistRow> & Record<string, unknown>;
 
 function toOptionalNumber(value: unknown): number | undefined {
   return value === undefined ? undefined : num(value);
@@ -29,15 +13,7 @@ function toBias(value: unknown): Item["bias"] {
   return value === "Bullish" || value === "Bearish" || value === "Watch" ? value : "Watch";
 }
 
-export type WatchlistPersistedRow = {
-  id?: string;
-  created_at?: string;
-  symbol: string;
-  manual_bias?: Item["bias"];
-  favorite?: boolean;
-  user_tags?: string[];
-  notes?: string[];
-};
+export type WatchlistPersistedRow = WatchlistRow;
 
 export type WatchlistRuntimeIntelligence = Partial<
   Pick<
@@ -70,17 +46,13 @@ export type WatchlistRuntimeIntelligence = Partial<
 >;
 
 export function mapWatchlistRowToItem(row: WatchlistDbRow, runtime?: WatchlistRuntimeIntelligence): Item {
-  const rawSymbol = pickFirst(row, WATCHLIST_DB_FIELD_MAP.symbol);
-  const manualBias = toBias(pickFirst(row, WATCHLIST_DB_FIELD_MAP.manualBias));
-  const baseNotes = Array.isArray(pickFirst(row, WATCHLIST_DB_FIELD_MAP.notes))
-    ? (pickFirst(row, WATCHLIST_DB_FIELD_MAP.notes) as unknown[]).filter(
-        (note): note is string => typeof note === "string"
-      )
+  const baseNotes = Array.isArray(row.notes)
+    ? row.notes.filter((note): note is string => typeof note === "string")
     : [];
 
   return {
-    symbol: typeof rawSymbol === "string" ? rawSymbol : "",
-    bias: manualBias,
+    symbol: typeof row.symbol === "string" ? row.symbol : "",
+    bias: toBias(row.bias),
     price: num(runtime?.price, 0),
     swingScore: toOptionalNumber(runtime?.swingScore),
     threeMonthScore: toOptionalNumber(runtime?.threeMonthScore),
@@ -109,16 +81,6 @@ export function mapWatchlistRowToItem(row: WatchlistDbRow, runtime?: WatchlistRu
   };
 }
 
-export const WATCHLIST_PERSISTED_FIELDS = [
-  "id",
-  "symbol",
-  "created_at",
-  "manual_bias",
-  "favorite",
-  "user_tags",
-  "notes",
-] as const;
-
 export const WATCHLIST_RUNTIME_ONLY_FIELDS = [
   "lr50",
   "lr50Slope",
@@ -131,10 +93,10 @@ export const WATCHLIST_RUNTIME_ONLY_FIELDS = [
   "ivPercentile",
 ] as const;
 
-export function mapItemToWatchlistPersistedRow(row: Item) {
+export function mapItemToWatchlistPersistedRow(row: Item): WatchlistInsert {
   return {
     symbol: row.symbol,
-    manual_bias: row.bias,
+    bias: row.bias,
     notes: row.notes,
   };
 }
@@ -153,4 +115,4 @@ export function mapIntelligenceSummaryToRuntime(summary: IntelligenceSymbolSumma
   };
 }
 
-export const WATCHLIST_MARKET_CONTEXT_SELECT = "symbol, user_tags";
+export const WATCHLIST_MARKET_CONTEXT_SELECT = "symbol";

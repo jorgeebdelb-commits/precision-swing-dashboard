@@ -16,6 +16,7 @@ import {
   mapItemToWatchlistPersistedRow,
   mapWatchlistRowToItem,
 } from "@/lib/watchlist/dbMapper";
+import { WATCHLIST_SELECT, WATCHLIST_TABLE, type WatchlistRow } from "@/lib/watchlist/schema";
 import InfoHelp from "@/components/ui/InfoHelp";
 
 type ChartRange = "1D" | "5D" | "1M";
@@ -390,8 +391,8 @@ export default function DashboardClientShell() {
         }
 
         const { data, error } = await supabase
-          .from("watchlist")
-          .select("*")
+          .from(WATCHLIST_TABLE)
+          .select(WATCHLIST_SELECT)
           .order("created_at", { ascending: true });
 
         if (error) {
@@ -399,17 +400,17 @@ export default function DashboardClientShell() {
           return;
         }
 
-        const dbRows = (data ?? []) as Record<string, unknown>[];
+        const dbRows = ((data ?? []) as unknown[]) as Partial<WatchlistRow>[];
         const symbols = dbRows
           .map((row) => (typeof row.symbol === "string" ? row.symbol : ""))
           .filter(Boolean);
-        let mapped: Item[] = dbRows.map((row) => mapWatchlistRowToItem(row)).filter((item) => item.symbol);
+        let mapped: Item[] = dbRows.map((row) => mapWatchlistRowToItem(row as Record<string, unknown>)).filter((item) => item.symbol);
 
         if (symbols.length) {
           const intelligenceRes = await fetch(`/api/intelligence?symbols=${encodeURIComponent(symbols.join(","))}`);
           if (intelligenceRes.ok) {
             const intelligence = (await intelligenceRes.json()) as IntelligenceApiResponse;
-            mapped = mergeWatchlistWithIntelligence(dbRows, intelligence);
+            mapped = mergeWatchlistWithIntelligence(dbRows as Record<string, unknown>[], intelligence);
           }
         }
 
@@ -745,7 +746,7 @@ export default function DashboardClientShell() {
       }
 
       const { error } = await supabase
-        .from("watchlist")
+        .from(WATCHLIST_TABLE)
         .insert([mapItemToWatchlistPersistedRow(row)]);
 
       if (error) {
@@ -775,7 +776,7 @@ export default function DashboardClientShell() {
       }
 
       const { error } = await supabase
-        .from("watchlist")
+        .from(WATCHLIST_TABLE)
         .delete()
         .eq("symbol", symbol);
 
@@ -915,7 +916,7 @@ export default function DashboardClientShell() {
       return true;
     }
 
-    const { error } = await supabase.from("watchlist").upsert(
+    const { error } = await supabase.from(WATCHLIST_TABLE).upsert(
       rows.map((row) => ({
         ...mapItemToWatchlistPersistedRow(row),
       })),

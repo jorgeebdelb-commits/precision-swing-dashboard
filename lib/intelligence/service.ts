@@ -4,12 +4,8 @@ import { routeExecutionStrategy } from "@/lib/execution/router";
 import { logExecutionSignal } from "@/lib/execution/performance";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { WATCHLIST_MARKET_CONTEXT_SELECT } from "@/lib/watchlist/dbMapper";
+import { WATCHLIST_TABLE, type WatchlistRow } from "@/lib/watchlist/schema";
 import type { AnalysisHorizon, IntelligenceApiResponse, IntelligenceSymbolSummary, MarketContextSnapshot } from "@/lib/intelligence/types";
-
-interface WatchlistRow {
-  symbol: string;
-  user_tags?: string[] | null;
-}
 
 interface FlowEventRow {
   symbol: string;
@@ -130,14 +126,14 @@ async function buildMarketContext(symbols: string[]): Promise<Record<string, Mar
 
   const [watchlistRes, flowRes, newsRes] = await Promise.all([
     supabase
-      .from("watchlist")
+      .from(WATCHLIST_TABLE)
       .select(WATCHLIST_MARKET_CONTEXT_SELECT)
       .in("symbol", symbols),
     supabase.from("flow_events").select("symbol, score").in("symbol", symbols),
     supabase.from("news_events").select("symbol, sentiment_score").in("symbol", symbols),
   ]);
 
-  const watchRows = (watchlistRes.data ?? []) as WatchlistRow[];
+  const watchRows = (watchlistRes.data ?? []) as Pick<WatchlistRow, "symbol">[];
   const flowRows = (flowRes.data ?? []) as FlowEventRow[];
   const newsRows = (newsRes.data ?? []) as NewsEventRow[];
 
@@ -162,10 +158,7 @@ async function buildMarketContext(symbols: string[]): Promise<Record<string, Mar
   }, {});
 
   return watchRows.reduce<Record<string, MarketContextSnapshot>>((acc, row) => {
-    const tagSector = Array.isArray(row.user_tags)
-      ? row.user_tags.find((tag) => typeof tag === "string" && tag.startsWith("sector:"))?.replace("sector:", "")
-      : null;
-    const sector = resolveSector(row.symbol, tagSector ?? null);
+    const sector = resolveSector(row.symbol, null);
     const sectorDefaults = SECTOR_CONTEXT_FALLBACK[sector ?? ""] ?? SECTOR_CONTEXT_FALLBACK.__DEFAULT__;
     const technical = toScore10(sectorDefaults.technical);
     const macro = toScore10(sectorDefaults.macro);
@@ -198,7 +191,7 @@ async function buildMarketContext(symbols: string[]): Promise<Record<string, Mar
 export async function getWatchlistSymbols(): Promise<string[]> {
   const supabase = getSupabaseServerClient();
   const { data } = await supabase
-    .from("watchlist")
+    .from(WATCHLIST_TABLE)
     .select("symbol")
     .order("created_at", { ascending: true });
 
