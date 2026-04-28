@@ -185,6 +185,11 @@ function resolveTier(metrics: RowMetrics, breadthRegime: BreadthRegime = "neutra
   const isLowOrModerateRisk = metrics.riskLabel === "Low" || metrics.riskLabel === "Medium";
   const isHighRisk = metrics.riskLabel === "High";
   const isExtremeRisk = metrics.riskLabel === "Extreme";
+  const hasEliteEvidence =
+    metrics.intelligence >= 7.5 ||
+    metrics.fundamental >= 7.6 ||
+    metrics.momentumToday >= 78 ||
+    metrics.hotSetup;
 
   if (isAvoid) {
     return {
@@ -220,11 +225,20 @@ function resolveTier(metrics: RowMetrics, breadthRegime: BreadthRegime = "neutra
 
   if (isBuy) {
     const tier1ConfidenceFloor = breadthRegime === "strong" ? 66 : breadthRegime === "weak" ? 74 : 70;
-    if (isLowOrModerateRisk && metrics.confidencePercent >= tier1ConfidenceFloor) {
+    const passesOpportunityGate =
+      metrics.opportunityScore >= 80 || (metrics.opportunityScore >= 72 && hasEliteEvidence);
+    if (isLowOrModerateRisk && metrics.confidencePercent >= tier1ConfidenceFloor && passesOpportunityGate) {
       return {
         tier: "tier1",
         contradiction,
         demotionReason: `${metrics.strategy} with ${metrics.riskLabel} risk and ${metrics.confidencePercent}% confidence qualifies for Tier 1 deployment (${breadthRegime} breadth floor ${tier1ConfidenceFloor}%).`,
+      };
+    }
+    if (isLowOrModerateRisk && metrics.confidencePercent >= tier1ConfidenceFloor && !passesOpportunityGate) {
+      return {
+        tier: "tier2",
+        contradiction,
+        demotionReason: `Tier 1 blocked: opportunity score ${metrics.opportunityScore} requires >=80, or >=72 plus elite evidence.`,
       };
     }
 
@@ -273,9 +287,11 @@ function inferSectorForSymbol(symbol: string): string {
   if (["NVDA", "AMD", "MRVL", "AVGO", "TSM"].includes(upperSymbol)) return "Semiconductors";
   if (["AMZN", "MSFT", "META", "GOOGL", "AAPL"].includes(upperSymbol)) return "Megacap Tech";
   if (["TSLA", "RIVN", "LCID"].includes(upperSymbol)) return "EV";
-  if (["MARA", "RIOT", "CLSK", "IREN"].includes(upperSymbol)) return "Crypto Mining";
+  if (["MARA", "WULF", "RIOT", "CLSK", "IREN"].includes(upperSymbol)) return "Crypto Mining";
+  if (["JOBY", "ACHR"].includes(upperSymbol)) return "Industrials";
+  if (["IBRX", "LLY", "PFE", "JNJ"].includes(upperSymbol)) return "Healthcare";
+  if (["QUBT", "QBTS", "RGTI", "IONQ"].includes(upperSymbol)) return "Quantum / Frontier Tech";
   if (["XOM", "CVX", "SLB"].includes(upperSymbol)) return "Energy";
-  if (["PFE", "LLY", "JNJ"].includes(upperSymbol)) return "Healthcare";
   if (["JPM", "MS", "GS"].includes(upperSymbol)) return "Financials";
   if (["CAT", "GE", "DE"].includes(upperSymbol)) return "Industrials";
   return "Other";
@@ -584,11 +600,31 @@ export default function DashboardClientShell() {
     };
     const contradictions: string[] = [];
 
+    const tier1Candidates: RowData[] = [];
     sorted.forEach((row) => {
       const tierContext = resolveTier(row.metrics, breadthRegime);
-      buckets[tierContext.tier].push(row);
+      if (tierContext.tier === "tier1") tier1Candidates.push(row);
+      else buckets[tierContext.tier].push(row);
       tierContext.contradiction.forEach((issue) => contradictions.push(`${row.item.symbol}: ${issue}`));
     });
+
+    tier1Candidates
+      .sort((a, b) => {
+        if (b.metrics.opportunityScore !== a.metrics.opportunityScore) {
+          return b.metrics.opportunityScore - a.metrics.opportunityScore;
+        }
+        return b.metrics.confidencePercent - a.metrics.confidencePercent;
+      })
+      .forEach((row, index) => {
+        if (index < 3) {
+          buckets.tier1.push(row);
+          return;
+        }
+        buckets.tier2.push(row);
+        contradictions.push(
+          `${row.item.symbol}: Tier 1 premium cap applied (top 3 only); symbol moved to Tier 2 despite qualifying floor.`
+        );
+      });
 
     return {
       ...buckets,
