@@ -34,6 +34,7 @@ export type SentimentResponse = {
 };
 
 export type Strategy =
+  | "Spec Buy"
   | "Buy Shares"
   | "Starter Shares"
   | "Starter Shares + Calls on Breakout"

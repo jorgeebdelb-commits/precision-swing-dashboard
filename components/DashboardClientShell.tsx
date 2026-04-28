@@ -38,7 +38,9 @@ type RiskStyle = "Conservative" | "Balanced" | "Aggressive";
 type HorizonFocus = "Swing" | "3 Month" | "6 Month" | "1 Year";
 
 const BUY_STRATEGIES = new Set<string>([
+  "Spec Buy",
   "Buy Shares",
+  "Starter Shares",
   "Buy Calls",
   "Buy Shares + Calls",
   "Buy LEAPS",
@@ -287,6 +289,7 @@ function strategyToBias(strategy: Strategy): Item["bias"] {
   if (strategy === "Avoid" || strategy === "Buy Puts") return "Bearish";
   if (
     strategy === "Buy Shares" ||
+    strategy === "Spec Buy" ||
     strategy === "Buy Shares + Calls" ||
     strategy === "Buy Calls" ||
     strategy === "Starter Shares" ||
