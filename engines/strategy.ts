@@ -76,6 +76,9 @@ export type RowMetrics = {
   sixMonth: number;
   oneYear: number;
   confidence: number;
+  confidencePercent: number;
+  finalScore: number;
+  contradictionFlags: string[];
   recommendation: string;
   strategy: Strategy;
   reason: string;
@@ -160,6 +163,12 @@ const confidenceToScore = (confidence: ConfidenceLevel): number => {
   if (confidence === "High") return 8.6;
   if (confidence === "Medium") return 6.4;
   return 4.3;
+};
+
+const confidenceToPercent = (confidence: ConfidenceLevel): number => {
+  if (confidence === "High") return 86;
+  if (confidence === "Medium") return 72;
+  return 58;
 };
 
 const symbolSeed = (symbol: string): number => {
@@ -746,6 +755,7 @@ export function computeMetrics(item: Item): RowMetrics {
   const oneYearStrategy = oneYearDecision.strategy;
 
   const confidence = confidenceToScore(finalDecision.confidence);
+  const confidencePercent = confidenceToPercent(finalDecision.confidence);
 
   const whaleV2 = Math.round(
     clamp(
@@ -766,6 +776,36 @@ export function computeMetrics(item: Item): RowMetrics {
         10 -
         riskScore * 0.24 +
         confidence * 2.4
+    )
+  );
+
+  const contradictionFlags: string[] = [];
+  if (item.bias === "Bullish" && swingSignal === "Avoid") {
+    contradictionFlags.push("Bullish bias vs bearish swing signal");
+  }
+  if (item.bias === "Bearish" && (swingSignal === "Strong Buy" || swingSignal === "Buy")) {
+    contradictionFlags.push("Bearish bias vs bullish swing signal");
+  }
+  const bearishHorizons = [swingSignal, threeMonthSignal, sixMonthSignal, oneYearSignal].filter((signal) =>
+    signal.includes("Sell")
+  ).length;
+  const bullishHorizons = [swingSignal, threeMonthSignal, sixMonthSignal, oneYearSignal].filter((signal) =>
+    signal.includes("Buy")
+  ).length;
+  if (bearishHorizons > 0 && bullishHorizons > 0) {
+    contradictionFlags.push("Mixed horizon signals");
+  }
+
+  const finalScore = Math.round(
+    clamp(
+      (swingExpanded * 0.35 +
+        threeMonthExpanded * 0.25 +
+        sixMonthExpanded * 0.2 +
+        oneYearExpanded * 0.2) *
+        10 +
+        (confidencePercent - 60) * 0.25 -
+        Math.max(0, riskScore - 55) * 0.12 -
+        contradictionFlags.length * 8
     )
   );
 
@@ -797,7 +837,19 @@ export function computeMetrics(item: Item): RowMetrics {
     belowVWAP: num(item.price) < num(item.lr50, num(item.price)),
     eventRiskHigh: false,
   });
-  const executionNotes = buildExecutionNotes(executionPlan.finalStrategy);
+  const qualityDominant = pillars.fundamental >= 7.2 && riskLabel !== "Extreme";
+  const momentumDominant = momentum >= 7.2 && technicals.trendAligned && num(item.volumeRatio, 1) >= 1.1;
+  const weakSetup =
+    finalScore < 65 || riskLabel === "Extreme" || swingSignal === "Avoid" || contradictionFlags.length > 0;
+
+  let filteredStrategy: Strategy;
+  if (weakSetup) filteredStrategy = "Avoid";
+  else if (momentumDominant && swingExpanded >= 7.2) filteredStrategy = "Buy Calls";
+  else if (qualityDominant && oneYearExpanded >= 7) filteredStrategy = "Buy Shares";
+  else if (finalScore >= 65) filteredStrategy = "Watch";
+  else filteredStrategy = "Avoid";
+
+  const executionNotes = buildExecutionNotes(filteredStrategy);
 
   const hotSetup =
     num(item.price) > 0 &&
@@ -807,6 +859,15 @@ export function computeMetrics(item: Item): RowMetrics {
 
   const why = buildWhy(item, pillars, technicals, riskLabel, profile);
   const marketRegime = getMarketRegime(pillars);
+
+  const strategyReason =
+    filteredStrategy === "Buy Calls"
+      ? `${item.symbol}: bullish momentum setup with confirmed trend and volume support.`
+      : filteredStrategy === "Buy Shares"
+      ? `${item.symbol}: quality-tilted profile with steadier multi-month score profile.`
+      : filteredStrategy === "Watch"
+      ? `${item.symbol}: mixed setup, monitor for cleaner alignment before deploying capital.`
+      : `${item.symbol}: weak or conflicting setup; risk/reward is not favorable right now.`;
 
   const notes: string[] = [finalDecision.reason, ...why];
   if (hotSetup) notes.push("Multi-horizon alignment");
@@ -827,9 +888,12 @@ export function computeMetrics(item: Item): RowMetrics {
     sixMonth: sixMonthExpanded,
     oneYear: oneYearExpanded,
     confidence,
+    confidencePercent,
+    finalScore,
+    contradictionFlags,
     recommendation: finalDecision.rating,
-    strategy: executionPlan.finalStrategy,
-    reason: executionPlan.reason,
+    strategy: filteredStrategy,
+    reason: strategyReason,
     why,
     swingSignal,
     threeMonthSignal,
