@@ -916,12 +916,18 @@ export default function DashboardClientShell() {
       return true;
     }
 
-    const { error } = await supabase.from(WATCHLIST_TABLE).upsert(
-      rows.map((row) => ({
-        ...mapItemToWatchlistPersistedRow(row),
-      })),
-      { onConflict: "symbol" }
-    );
+    const payload = rows.map((row) => ({
+      ...mapItemToWatchlistPersistedRow(row),
+    }));
+    const payloadKeys = Array.from(
+      payload.reduce<Set<string>>((keys, entry) => {
+        Object.keys(entry).forEach((key) => keys.add(key));
+        return keys;
+      }, new Set<string>())
+    ).sort();
+    console.log("[watchlist.save] upsert payload keys:", payloadKeys);
+
+    const { error } = await supabase.from(WATCHLIST_TABLE).upsert(payload, { onConflict: "symbol" });
 
     if (error) {
       setIntelligenceMessage(`Save failed: ${error.message}`);
