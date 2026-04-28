@@ -47,6 +47,7 @@ const HORIZON_WEIGHTS: Record<HorizonKey, Record<keyof LayerScores, number>> = {
 
 const clamp100 = (value: number): number => Math.max(0, Math.min(100, Number(value.toFixed(2))));
 const from10 = (value: number): number => clamp100(value * 10);
+const centeredStretch = (score: number, factor = 1.18): number => clamp100(50 + (score - 50) * factor);
 
 function avg(values: number[], fallback = 50): number {
   if (!values.length) return fallback;
@@ -104,12 +105,39 @@ export function deriveLayerScores(params: {
     ])
   );
 
+  const sector = marketContext.sector ?? "";
+  const isSemis = sector === "Semiconductors";
+  const isCryptoMiner = sector === "Crypto Mining";
+  const isBiotech = sector === "Biotech";
+  const isEV = sector === "EV";
+  const isFinancials = sector === "Financials";
+  const isIndustrials = sector === "Industrials";
+  const isMiners = sector === "Mining";
+  const isMegaCapTech = ["Technology", "Internet", "Software", "Cloud", "Communication Services"].includes(sector);
+
+  const personalityTilt = {
+    technical: isSemis || isEV ? 2.8 : isMiners ? -1.2 : isIndustrials ? 0.8 : 0,
+    flow: isMegaCapTech ? 1.4 : isCryptoMiner ? 2.4 : isFinancials ? 1.1 : 0,
+    sentiment: isBiotech ? -0.8 : isMegaCapTech ? 1.1 : isMiners ? -1.4 : 0,
+    macro: isMiners ? 1.8 : isFinancials ? 2.1 : isCryptoMiner ? -1.8 : 0,
+    fundamental: isSemis ? 1.6 : isMegaCapTech ? 1.3 : isBiotech ? -1.6 : 0,
+  };
+
+  const volatilityPenalty = marketContext.volatility >= 4 ? 2.8 : marketContext.volatility >= 3.2 ? 1.4 : 0;
+  const volumeBoost = marketContext.volumeRatio >= 1.2 ? 2 : marketContext.volumeRatio >= 1.05 ? 1 : 0;
+
+  const stretchedTechnical = centeredStretch(technicalScore + personalityTilt.technical + volumeBoost);
+  const stretchedFlow = centeredStretch(flowScore + personalityTilt.flow + volumeBoost);
+  const stretchedSentiment = centeredStretch(sentimentScore + personalityTilt.sentiment);
+  const stretchedMacro = centeredStretch(macroScore + personalityTilt.macro - volatilityPenalty * 0.4);
+  const stretchedFundamental = centeredStretch(fundamentalScore + personalityTilt.fundamental - volatilityPenalty * 0.3);
+
   return {
-    technicalScore,
-    sentimentScore,
-    flowScore,
-    macroScore,
-    fundamentalScore,
+    technicalScore: stretchedTechnical,
+    sentimentScore: stretchedSentiment,
+    flowScore: stretchedFlow,
+    macroScore: stretchedMacro,
+    fundamentalScore: stretchedFundamental,
   };
 }
 
@@ -124,13 +152,16 @@ export function toRating(finalScore: number): HorizonDecisionScore["rating"] {
 
 export function buildHorizonDecisionScore(horizon: HorizonKey, layerScores: LayerScores): HorizonDecisionScore {
   const weights = HORIZON_WEIGHTS[horizon];
-  const finalScore = clamp100(
+  const weightedScore = clamp100(
     layerScores.technicalScore * weights.technicalScore +
       layerScores.flowScore * weights.flowScore +
       layerScores.sentimentScore * weights.sentimentScore +
       layerScores.macroScore * weights.macroScore +
       layerScores.fundamentalScore * weights.fundamentalScore
   );
+  const convexityBoost = Math.max(0, (layerScores.technicalScore - 62) * 0.1) + Math.max(0, (layerScores.flowScore - 60) * 0.08);
+  const regimePenalty = Math.max(0, (52 - layerScores.macroScore) * 0.07);
+  const finalScore = clamp100(centeredStretch(weightedScore, 1.12) + convexityBoost - regimePenalty);
 
   return {
     finalScore,

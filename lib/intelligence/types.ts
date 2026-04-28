@@ -16,7 +16,8 @@ export type StrategyRecommendation =
   | "Starter Shares"
   | "Starter Shares + Calls on Breakout"
   | "Hedge Only"
-  | "Watch";
+  | "Watch"
+  | "Speculative Buy";
 
 export interface MarketContextSnapshot {
   price: number;
