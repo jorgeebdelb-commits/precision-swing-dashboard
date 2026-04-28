@@ -33,7 +33,12 @@ type TierKey = "tier1" | "tier2" | "tier3";
 type RiskStyle = "Conservative" | "Balanced" | "Aggressive";
 type HorizonFocus = "Swing" | "3 Month" | "6 Month" | "1 Year";
 
-const ACTIONABLE_STRATEGIES = new Set<Strategy>(["Buy Calls", "Buy Shares", "Buy Shares + Calls"]);
+const BUY_STRATEGIES = new Set<string>([
+  "Buy Shares",
+  "Buy Calls",
+  "Buy Shares + Calls",
+  "Buy LEAPS",
+]);
 
 function scoreColor(score: number) {
   if (score >= 90) return "#22c55e";
@@ -150,9 +155,12 @@ function resolveTier(metrics: RowMetrics): {
   demotionReason: string;
 } {
   const contradiction: string[] = [];
-  const isActionable = ACTIONABLE_STRATEGIES.has(metrics.strategy);
+  const isBuy = BUY_STRATEGIES.has(metrics.strategy);
   const isWatch = metrics.strategy === "Watch";
   const isAvoid = metrics.strategy === "Avoid";
+  const isLowOrModerateRisk = metrics.riskLabel === "Low" || metrics.riskLabel === "Medium";
+  const isHighRisk = metrics.riskLabel === "High";
+  const isExtremeRisk = metrics.riskLabel === "Extreme";
 
   if (isAvoid) {
     return {
@@ -162,51 +170,66 @@ function resolveTier(metrics: RowMetrics): {
     };
   }
 
-  if (metrics.opportunityScore < 65) {
+  if (isExtremeRisk) {
     return {
       tier: "tier3",
       contradiction,
-      demotionReason: "Score below 65 routes this symbol to Tier 3.",
+      demotionReason: "Extreme risk force-routes this symbol to Tier 3.",
     };
   }
 
   if (isWatch) {
-    return {
-      tier: "tier2",
-      contradiction,
-      demotionReason:
-        metrics.opportunityScore >= 80
-          ? "Strong score, but Watch strategy caps this setup at Tier 2."
-          : "Watch setup with score in the 65-79 band is Tier 2.",
-    };
-  }
-
-  if (isActionable) {
-    if (metrics.opportunityScore >= 80 && metrics.confidencePercent >= 70) {
-      return {
-        tier: "tier1",
-        contradiction,
-        demotionReason: "Actionable strategy with strong score and confidence qualifies for Tier 1.",
-      };
-    }
-    if (metrics.opportunityScore >= 65) {
+    if (isLowOrModerateRisk) {
       return {
         tier: "tier2",
         contradiction,
-        demotionReason:
-          metrics.opportunityScore >= 80
-            ? "Strong score but confidence is below 70, so this remains Tier 2."
-            : "Actionable setup in the 65-79 score band is Tier 2.",
+        demotionReason: `Watch with ${metrics.riskLabel} risk stays in Tier 2 for preparation only.`,
       };
     }
+
+    return {
+      tier: "tier3",
+      contradiction,
+      demotionReason: `Watch with ${metrics.riskLabel} risk blocks capital deployment and routes to Tier 3.`,
+    };
+  }
+
+  if (isBuy) {
+    if (isLowOrModerateRisk && metrics.confidencePercent >= 70) {
+      return {
+        tier: "tier1",
+        contradiction,
+        demotionReason: `${metrics.strategy} with ${metrics.riskLabel} risk and ${metrics.confidencePercent}% confidence qualifies for Tier 1 deployment.`,
+      };
+    }
+
+    if (isHighRisk) {
+      return {
+        tier: "tier2",
+        contradiction,
+        demotionReason: `${metrics.strategy} but High risk -> Tier 2 only (starter/half size).`,
+      };
+    }
+
+    return {
+      tier: "tier2",
+      contradiction,
+      demotionReason: `${metrics.strategy} with ${metrics.riskLabel} risk but ${metrics.confidencePercent}% confidence (<70) stays Tier 2.`,
+    };
   }
 
   contradiction.push(`Unsupported strategy ${metrics.strategy} for tiering rules`);
   return {
-    tier: "tier2",
+    tier: "tier3",
     contradiction,
-    demotionReason: "Non-avoid, non-watch setup defaults to Tier 2 unless score drops below 65.",
+    demotionReason: "Non-buy strategy is not deployable capital and defaults to Tier 3.",
   };
+}
+
+function positionSizeForTier(tier: TierKey): string {
+  if (tier === "tier1") return "Full Size / Standard Size";
+  if (tier === "tier2") return "Starter Size / Half Size";
+  return "No Position";
 }
 
 function explainTier(metrics: RowMetrics): string {
@@ -480,7 +503,7 @@ export default function DashboardClientShell() {
   const topThree = useMemo(
     () =>
       [...rows]
-        .filter((x) => num(x.item.price) > 0 && ACTIONABLE_STRATEGIES.has(x.metrics.strategy))
+        .filter((x) => num(x.item.price) > 0 && resolveTier(x.metrics).tier === "tier1")
         .sort((a, b) => b.metrics.finalScore - a.metrics.finalScore)
         .slice(0, 3),
     [rows]
@@ -1188,7 +1211,7 @@ export default function DashboardClientShell() {
         <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
           <InfoHelp
             title="Spotlight Cards"
-            content="Spotlight only ranks actionable Buy setups. Spotlight #1 is always the highest-ranked actionable symbol by final score."
+            content="Spotlight only ranks Tier 1 deploy-now setups. If no symbol qualifies for Tier 1, the dashboard shows no deployable setups today."
             placement="bottom"
           />
         </div>
@@ -1261,7 +1284,7 @@ export default function DashboardClientShell() {
               fontWeight: 700,
             }}
           >
-            No strong setups today
+            No deployable setups today
           </div>
         )}
       </div>
@@ -1834,7 +1857,7 @@ export default function DashboardClientShell() {
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
           <InfoHelp
             title="Watchlist Tiers"
-            content="Tier hierarchy is rule-based: Avoid is always Tier 3, Watch is capped at Tier 2, and actionable Buy strategies can reach Tier 1 only with >=80 score and >=70 confidence."
+            content="Tier 1 = Deploy Capital Now, Tier 2 = Watch or smaller size, Tier 3 = No Capital. Avoid or Extreme risk is always Tier 3."
             placement="bottom"
           />
         </div>
@@ -1876,6 +1899,7 @@ export default function DashboardClientShell() {
                   <th style={{ padding: 9, textAlign: "center" }}>Opp Score</th>
                   <th style={{ padding: 9, textAlign: "center" }}>Confidence</th>
                   <th style={{ padding: 9, textAlign: "center" }}>Risk</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Position Sizing</th>
                   <th style={{ padding: 9, textAlign: "left" }}>Why</th>
                   <th style={{ padding: 9, textAlign: "center" }}>Action</th>
                 </tr>
@@ -1947,8 +1971,12 @@ export default function DashboardClientShell() {
                   {metrics.riskLabel}
                 </td>
 
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 700 }}>
+                  {positionSizeForTier(bucketKey)}
+                </td>
+
                 <td style={{ padding: 9, textAlign: "left", maxWidth: 340 }}>
-                  {explainTier(metrics)} {metrics.reason}
+                  {explainTier(metrics)}
                   {metrics.contradictionFlags.length ? ` (${metrics.contradictionFlags.join("; ")})` : ""}
                 </td>
 
