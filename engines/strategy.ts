@@ -229,6 +229,19 @@ const SECTOR_ADJUSTMENTS: Record<Sector, { fundamental: number; technical: numbe
   Unknown: { fundamental: 0, technical: 0, environment: 0 },
 };
 
+const SECTOR_STRENGTH_BASE: Record<Sector, number> = {
+  Semiconductors: 8.3,
+  "Megacap Tech": 7.7,
+  EV: 5.8,
+  "Crypto Mining": 5.1,
+  Energy: 6.4,
+  Healthcare: 6.2,
+  Financials: 6.1,
+  Industrials: 6.2,
+  Consumer: 6.3,
+  Unknown: 5.8,
+};
+
 const clamp10 = (value: number): number =>
   Math.max(1, Math.min(10, Math.round(value * 10) / 10));
 
@@ -685,8 +698,27 @@ function buildEngineInput(params: {
 }): RecommendationEngineInput {
   const { swingScore, threeMonthScore, sixMonthScore, oneYearScore, pillars, item, riskLabel, technicals, momentum } =
     params;
+  const profile = getTickerProfile(item.symbol);
   const volatilityComposite = clamp10((technicals.atrPercent * 0.45 + technicals.volatilityPercent * 0.55) / 1.8);
   const whalesIntel = clamp10((pillars.intelligence * 0.68 + scaleTo10(num(item.whaleScore, 60)) * 0.32));
+  const price = Math.max(0.01, num(item.price));
+  const support = num(item.support, price * 0.95);
+  const resistance = Math.max(support + 0.01, num(item.resistance, price * 1.05));
+  const distancePct = ((resistance - price) / price) * 100;
+  const distanceFromResistance = clamp10(9.2 - Math.max(0, distancePct - 1.2) * 0.95);
+  const trendConsistency = clamp10(
+    5.2 +
+      (technicals.trendAligned ? 2 : -0.9) +
+      Math.min(2.2, Math.max(-2.2, technicals.lr50Slope * 0.18 + technicals.lr100Slope * 0.12))
+  );
+  const volumeConfirmation = clamp10(4.7 + Math.min(2.7, Math.max(-1.1, (num(item.volumeRatio, 1) - 1) * 3.4)));
+  const volatilityStability = clamp10(10 - (technicals.atrPercent * 0.36 + technicals.volatilityPercent * 0.26));
+  const horizonSpread =
+    Math.max(swingScore, threeMonthScore, sixMonthScore, oneYearScore) -
+    Math.min(swingScore, threeMonthScore, sixMonthScore, oneYearScore);
+  const multiTimeframeAgreement = clamp10(9.6 - horizonSpread * 1.2);
+  const sectorStrength = clamp10(SECTOR_STRENGTH_BASE[profile.sector] + symbolJitter(item.symbol, 0.35));
+  const newsClarity = clamp10(scaleTo10(num(item.whaleScore, 60)) * 0.5 + scaleTo10(pillars.intelligence) * 0.5);
 
   return {
     swingScore,
@@ -700,6 +732,13 @@ function buildEngineInput(params: {
     momentum,
     volatility: volatilityComposite,
     riskLevel: riskLabel,
+    trendConsistency,
+    volumeConfirmation,
+    distanceFromResistance,
+    volatilityStability,
+    multiTimeframeAgreement,
+    sectorStrength,
+    newsClarity,
   };
 }
 
@@ -1023,6 +1062,16 @@ export function computeMetrics(item: Item): RowMetrics {
       ? "NVDA: AI leadership and institutional demand keep multi-horizon conviction stronger than peers."
       : item.symbol === "AMD"
       ? "AMD: momentum is constructive but trails NVDA leadership, so entries should stay disciplined."
+      : item.symbol === "AMZN"
+      ? "AMZN: steadier mega-cap trend and durable fundamentals support patient accumulation over chasing breakouts."
+      : item.symbol === "MARA"
+      ? "MARA: high-beta BTC linkage can move fast, so tactical size and tighter risk controls matter most."
+      : item.symbol === "NEM"
+      ? "NEM: defensive gold exposure offers macro-hedge value, but upside conviction depends on real rates and dollar pressure."
+      : item.symbol === "PLTR"
+      ? "PLTR: spec-growth momentum is strong, yet headline sensitivity keeps sizing and entries disciplined."
+      : item.symbol === "TSLA"
+      ? "TSLA: trend remains tradable but volatility regime is elevated, favoring staged entries over full-size deployment."
       : filteredStrategy === "Buy Shares + Calls"
       ? `${item.symbol}: momentum and participation are both strong, supporting blended shares and calls exposure.`
       : filteredStrategy === "Buy Calls"

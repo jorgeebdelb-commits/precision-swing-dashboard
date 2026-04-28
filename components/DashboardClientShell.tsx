@@ -156,7 +156,24 @@ function toDisplayScore(score: number): number {
   return Math.round(num(score) * 10);
 }
 
-function resolveTier(metrics: RowMetrics): {
+type BreadthRegime = "strong" | "neutral" | "weak";
+
+function getBreadthRegime(rows: RowData[]): BreadthRegime {
+  if (!rows.length) return "neutral";
+  const qualitySetups = rows.filter(
+    (row) =>
+      BUY_STRATEGIES.has(row.metrics.strategy) &&
+      (row.metrics.riskLabel === "Low" || row.metrics.riskLabel === "Medium") &&
+      row.metrics.confidencePercent >= 66 &&
+      row.metrics.finalScore >= 67
+  ).length;
+  const qualityRatio = qualitySetups / rows.length;
+  if (qualityRatio >= 0.45 || qualitySetups >= 4) return "strong";
+  if (qualityRatio <= 0.2 && qualitySetups <= 1) return "weak";
+  return "neutral";
+}
+
+function resolveTier(metrics: RowMetrics, breadthRegime: BreadthRegime = "neutral"): {
   tier: TierKey;
   contradiction: string[];
   demotionReason: string;
@@ -202,11 +219,12 @@ function resolveTier(metrics: RowMetrics): {
   }
 
   if (isBuy) {
-    if (isLowOrModerateRisk && metrics.confidencePercent >= 70) {
+    const tier1ConfidenceFloor = breadthRegime === "strong" ? 66 : breadthRegime === "weak" ? 74 : 70;
+    if (isLowOrModerateRisk && metrics.confidencePercent >= tier1ConfidenceFloor) {
       return {
         tier: "tier1",
         contradiction,
-        demotionReason: `${metrics.strategy} with ${metrics.riskLabel} risk and ${metrics.confidencePercent}% confidence qualifies for Tier 1 deployment.`,
+        demotionReason: `${metrics.strategy} with ${metrics.riskLabel} risk and ${metrics.confidencePercent}% confidence qualifies for Tier 1 deployment (${breadthRegime} breadth floor ${tier1ConfidenceFloor}%).`,
       };
     }
 
@@ -239,8 +257,8 @@ function positionSizeForTier(tier: TierKey): string {
   return "No Position";
 }
 
-function explainTier(metrics: RowMetrics): string {
-  const tierContext = resolveTier(metrics);
+function explainTier(metrics: RowMetrics, breadthRegime: BreadthRegime): string {
+  const tierContext = resolveTier(metrics, breadthRegime);
   if (tierContext.tier === "tier1") {
     return `Tier 1: ${tierContext.demotionReason}`;
   }
@@ -534,22 +552,22 @@ export default function DashboardClientShell() {
     };
   }, [chartRange, chartSeries, selectedItem, selectedMetrics]);
 
-  const topThree = useMemo(
-    () =>
-      [...rows]
-        .filter((x) => num(x.item.price) > 0 && resolveTier(x.metrics).tier === "tier1")
-        .sort((a, b) => b.metrics.finalScore - a.metrics.finalScore)
-        .slice(0, 3),
-    [rows]
-  );
-
   const sortedRows = useMemo(
     () => [...rows].sort((a, b) => b.metrics.finalScore - a.metrics.finalScore),
     [rows]
   );
+  const breadthRegime = useMemo(() => getBreadthRegime(sortedRows), [sortedRows]);
+  const topThree = useMemo(
+    () =>
+      [...rows]
+        .filter((x) => num(x.item.price) > 0 && resolveTier(x.metrics, breadthRegime).tier === "tier1")
+        .sort((a, b) => b.metrics.finalScore - a.metrics.finalScore)
+        .slice(0, 3),
+    [breadthRegime, rows]
+  );
 
   const watchlistBuckets = useMemo(() => {
-    const sorted = [...rows].sort((a, b) => {
+    const sorted = [...sortedRows].sort((a, b) => {
       if (b.metrics.opportunityScore !== a.metrics.opportunityScore) {
         return b.metrics.opportunityScore - a.metrics.opportunityScore;
       }
@@ -567,7 +585,7 @@ export default function DashboardClientShell() {
     const contradictions: string[] = [];
 
     sorted.forEach((row) => {
-      const tierContext = resolveTier(row.metrics);
+      const tierContext = resolveTier(row.metrics, breadthRegime);
       buckets[tierContext.tier].push(row);
       tierContext.contradiction.forEach((issue) => contradictions.push(`${row.item.symbol}: ${issue}`));
     });
@@ -575,8 +593,9 @@ export default function DashboardClientShell() {
     return {
       ...buckets,
       contradictions,
+      breadthRegime,
     };
-  }, [rows]);
+  }, [breadthRegime, sortedRows]);
 
   const portfolioPlan = useMemo(() => {
     const totalCapital = Math.max(0, Number.parseFloat(portfolioCapitalInput.replace(/[^\d.]/g, "")) || 0);
@@ -2011,7 +2030,7 @@ export default function DashboardClientShell() {
                 </td>
 
                 <td style={{ padding: 9, textAlign: "left", maxWidth: 340 }}>
-                  {explainTier(metrics)}
+                  {explainTier(metrics, watchlistBuckets.breadthRegime)}
                   {metrics.contradictionFlags.length ? ` (${metrics.contradictionFlags.join("; ")})` : ""}
                 </td>
 
