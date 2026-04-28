@@ -28,12 +28,18 @@ type RowData = {
   metrics: RowMetrics;
 };
 
+type TierKey = "tier1" | "tier2" | "tier3";
+
 type RiskStyle = "Conservative" | "Balanced" | "Aggressive";
 type HorizonFocus = "Swing" | "3 Month" | "6 Month" | "1 Year";
 
-function glowColor(score: number) {
-  if (score >= 80) return "#22c55e";
-  if (score >= 65) return "#f59e0b";
+const ACTIONABLE_STRATEGIES = new Set<Strategy>(["Buy Calls", "Buy Shares", "Buy Shares + Calls"]);
+
+function scoreColor(score: number) {
+  if (score >= 90) return "#22c55e";
+  if (score >= 80) return "#4ade80";
+  if (score >= 70) return "#facc15";
+  if (score >= 60) return "#fb923c";
   return "#ef4444";
 }
 
@@ -138,21 +144,80 @@ function toDisplayScore(score: number): number {
   return Math.round(num(score) * 10);
 }
 
+function resolveTier(metrics: RowMetrics): {
+  tier: TierKey;
+  contradiction: string[];
+  demotionReason: string;
+} {
+  const contradiction: string[] = [];
+  const isActionable = ACTIONABLE_STRATEGIES.has(metrics.strategy);
+  const isWatch = metrics.strategy === "Watch";
+  const isAvoid = metrics.strategy === "Avoid";
+
+  if (isAvoid) {
+    return {
+      tier: "tier3",
+      contradiction,
+      demotionReason: "Avoid strategy force-routes this symbol to Tier 3.",
+    };
+  }
+
+  if (metrics.opportunityScore < 65) {
+    return {
+      tier: "tier3",
+      contradiction,
+      demotionReason: "Score below 65 routes this symbol to Tier 3.",
+    };
+  }
+
+  if (isWatch) {
+    return {
+      tier: "tier2",
+      contradiction,
+      demotionReason:
+        metrics.opportunityScore >= 80
+          ? "Strong score, but Watch strategy caps this setup at Tier 2."
+          : "Watch setup with score in the 65-79 band is Tier 2.",
+    };
+  }
+
+  if (isActionable) {
+    if (metrics.opportunityScore >= 80 && metrics.confidencePercent >= 70) {
+      return {
+        tier: "tier1",
+        contradiction,
+        demotionReason: "Actionable strategy with strong score and confidence qualifies for Tier 1.",
+      };
+    }
+    if (metrics.opportunityScore >= 65) {
+      return {
+        tier: "tier2",
+        contradiction,
+        demotionReason:
+          metrics.opportunityScore >= 80
+            ? "Strong score but confidence is below 70, so this remains Tier 2."
+            : "Actionable setup in the 65-79 score band is Tier 2.",
+      };
+    }
+  }
+
+  contradiction.push(`Unsupported strategy ${metrics.strategy} for tiering rules`);
+  return {
+    tier: "tier2",
+    contradiction,
+    demotionReason: "Non-avoid, non-watch setup defaults to Tier 2 unless score drops below 65.",
+  };
+}
+
 function explainTier(metrics: RowMetrics): string {
-  if (metrics.opportunityScore >= 80) {
-    return "Tier 1: strong swing momentum, sector leadership, and positive catalyst alignment.";
+  const tierContext = resolveTier(metrics);
+  if (tierContext.tier === "tier1") {
+    return `Tier 1: ${tierContext.demotionReason}`;
   }
-
-  if (metrics.opportunityScore >= 65) {
-    return "Tier 2: setup is tradable but needs better score confirmation before Tier 1 status.";
+  if (tierContext.tier === "tier2") {
+    return `Tier 2: ${tierContext.demotionReason}`;
   }
-
-  const contradictionNote =
-    metrics.swing >= 8 && metrics.threeMonth >= 8
-      ? " Explicit downgrade: short-term strength is offset by weak broader structure and poor reward/risk."
-      : "";
-
-  return `Tier 3: weak trend, conflicting signals, or poor reward/risk profile.${contradictionNote}`;
+  return `Tier 3: ${tierContext.demotionReason}`;
 }
 
 function inferSectorForSymbol(symbol: string): string {
@@ -415,7 +480,7 @@ export default function DashboardClientShell() {
   const topThree = useMemo(
     () =>
       [...rows]
-        .filter((x) => num(x.item.price) > 0)
+        .filter((x) => num(x.item.price) > 0 && ACTIONABLE_STRATEGIES.has(x.metrics.strategy))
         .sort((a, b) => b.metrics.finalScore - a.metrics.finalScore)
         .slice(0, 3),
     [rows]
@@ -437,10 +502,22 @@ export default function DashboardClientShell() {
       return b.metrics.swing - a.metrics.swing;
     });
 
+    const buckets: Record<TierKey, RowData[]> = {
+      tier1: [],
+      tier2: [],
+      tier3: [],
+    };
+    const contradictions: string[] = [];
+
+    sorted.forEach((row) => {
+      const tierContext = resolveTier(row.metrics);
+      buckets[tierContext.tier].push(row);
+      tierContext.contradiction.forEach((issue) => contradictions.push(`${row.item.symbol}: ${issue}`));
+    });
+
     return {
-      tier1: sorted.filter((row) => row.metrics.opportunityScore >= 80),
-      tier2: sorted.filter((row) => row.metrics.opportunityScore >= 65 && row.metrics.opportunityScore <= 79),
-      tier3: sorted.filter((row) => row.metrics.opportunityScore < 65),
+      ...buckets,
+      contradictions,
     };
   }, [rows]);
 
@@ -1111,12 +1188,12 @@ export default function DashboardClientShell() {
         <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
           <InfoHelp
             title="Spotlight Cards"
-            content="Top-ranked symbols appear here because their score quality and setup alignment are strongest right now. Spotlight rank can change quickly when confidence, momentum, or risk shifts."
+            content="Spotlight only ranks actionable Buy setups. Spotlight #1 is always the highest-ranked actionable symbol by final score."
             placement="bottom"
           />
         </div>
-        {(topThree.length ? topThree : rows.slice(0, 3)).map(
-          ({ item, metrics }, index) => (
+        {topThree.length ? (
+          topThree.map(({ item, metrics }, index) => (
             <div
               key={item.symbol}
               onClick={() => setSelectedSymbol(item.symbol)}
@@ -1173,7 +1250,19 @@ export default function DashboardClientShell() {
                 {metrics.swingStrategy} • Entry {metrics.entryZone}
               </div>
             </div>
-          )
+          ))
+        ) : (
+          <div
+            style={{
+              ...panelStyle(),
+              gridColumn: "1 / -1",
+              padding: 16,
+              color: "#cbd5e1",
+              fontWeight: 700,
+            }}
+          >
+            No strong setups today
+          </div>
         )}
       </div>
 
@@ -1433,9 +1522,9 @@ export default function DashboardClientShell() {
               [
                 "Momentum",
                 selectedMetrics.momentumToday,
-                glowColor(selectedMetrics.momentumToday),
+                scoreColor(selectedMetrics.momentumToday),
               ],
-              ["Final Score", selectedMetrics.finalScore, glowColor(selectedMetrics.finalScore)],
+              ["Final Score", selectedMetrics.finalScore, scoreColor(selectedMetrics.finalScore)],
               ["Action", selectedMetrics.strategy, "#38bdf8"],
             ].map((card) => (
               <div key={String(card[0])} style={statCardStyle()}>
@@ -1745,10 +1834,19 @@ export default function DashboardClientShell() {
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
           <InfoHelp
             title="Watchlist Tiers"
-            content="Tier assignment is based only on Opportunity Score: Tier 1 is >= 80, Tier 2 is 65-79, and Tier 3 is < 65. Risk and confidence remain separate columns and never directly force tier placement."
+            content="Tier hierarchy is rule-based: Avoid is always Tier 3, Watch is capped at Tier 2, and actionable Buy strategies can reach Tier 1 only with >=80 score and >=70 confidence."
             placement="bottom"
           />
         </div>
+        {watchlistBuckets.contradictions.length ? (
+          <p style={{ color: "#fca5a5", marginTop: 0, fontSize: 12 }}>
+            Hierarchy audit flagged: {watchlistBuckets.contradictions.join(" | ")}
+          </p>
+        ) : (
+          <p style={{ color: "#86efac", marginTop: 0, fontSize: 12 }}>
+            Hierarchy audit passed: no strategy/tier contradictions detected.
+          </p>
+        )}
         {(
           [
             ["tier1", "Tier 1 Opportunities"],
@@ -1807,7 +1905,7 @@ export default function DashboardClientShell() {
                   {item.symbol}
                 </td>
 
-                <td style={{ padding: 9, textAlign: "center", fontWeight: 900, color: signalColor(metrics.swingSignal) }}>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 900, color: scoreColor(toDisplayScore(metrics.swing)) }}>
                   {toDisplayScore(metrics.swing)}
                 </td>
 
@@ -1816,26 +1914,26 @@ export default function DashboardClientShell() {
                     padding: 9,
                     textAlign: "center",
                     fontWeight: 900,
-                    color: signalColor(metrics.threeMonthSignal),
+                    color: scoreColor(toDisplayScore(metrics.threeMonth)),
                   }}
                 >
                   {toDisplayScore(metrics.threeMonth)}
                 </td>
-                <td style={{ padding: 9, textAlign: "center", fontWeight: 900 }}>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 900, color: scoreColor(toDisplayScore(metrics.sixMonth)) }}>
                   {toDisplayScore(metrics.sixMonth)}
                 </td>
 
-                <td style={{ padding: 9, textAlign: "center", fontWeight: 900 }}>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 900, color: scoreColor(toDisplayScore(metrics.oneYear)) }}>
                   {toDisplayScore(metrics.oneYear)}
                 </td>
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 800 }}>
                   {metrics.strategy}
                 </td>
 
-                <td style={{ padding: 9, textAlign: "center", fontWeight: 900 }}>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 900, color: scoreColor(metrics.opportunityScore) }}>
                   {metrics.opportunityScore}
                 </td>
-                <td style={{ padding: 9, textAlign: "center", fontWeight: 900 }}>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 900, color: scoreColor(metrics.confidencePercent) }}>
                   {metrics.confidencePercent}
                 </td>
                 <td
