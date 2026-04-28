@@ -1,6 +1,7 @@
 import type {
   Item,
   MarketRegime,
+  RiskLabel,
   Strategy,
 } from "../types/dashboard";
 import {
@@ -12,7 +13,6 @@ import { routeExecutionStrategy } from "@/lib/execution/router";
 
 import { clamp, formatPrice, num } from "../app/lib/helpers";
 
-export type RiskLabel = "Low" | "Medium" | "High" | "Extreme";
 type RiskBucket = RiskLabel | `${RiskLabel}/${RiskLabel}`;
 type TickerClass = "MegaCapTech" | "LargeGrowth" | "Speculative";
 
@@ -555,7 +555,7 @@ export function computeRisk(
   );
 
   const riskScore = Math.round(risk10 * 10);
-  const riskLabel = applyTickerRiskBucket(item.symbol, risk10);
+  const riskLabel: RiskLabel = applyTickerRiskBucket(item.symbol, risk10);
 
   return { riskScore, riskLabel };
 }
@@ -993,13 +993,13 @@ export function computeMetrics(item: Item): RowMetrics {
   });
   const qualityDominant = pillars.fundamental >= 7.2 && riskLabel !== "Extreme";
   const momentumDominant = momentum >= 7.2 && technicals.trendAligned && num(item.volumeRatio, 1) >= 1.1;
-  const weakSetup =
-    finalScore < 65 || riskLabel === "Extreme" || swingSignal === "Avoid" || contradictionFlags.length > 0;
+  const weakSetup = finalScore < 65 || swingSignal === "Avoid" || contradictionFlags.length > 0;
 
   let filteredStrategy: Strategy;
-  if (weakSetup && riskLabel !== "Extreme" && finalScore >= 57) filteredStrategy = "Watch";
+  if (riskLabel === "Extreme" && swingExpanded >= 6.8 && confidencePercent >= 58) filteredStrategy = "Spec Buy";
+  else if (riskLabel === "Extreme") filteredStrategy = "Avoid";
+  else if (weakSetup && finalScore >= 57) filteredStrategy = "Watch";
   else if (weakSetup) filteredStrategy = "Avoid";
-  else if (riskLabel === "Extreme" && swingExpanded >= 6.8 && confidencePercent >= 58) filteredStrategy = "Spec Buy";
   else if (momentumDominant && confidencePercent >= 74 && riskLabel !== "High") filteredStrategy = "Buy Shares + Calls";
   else if (momentumDominant && swingExpanded >= 7.2) filteredStrategy = "Buy Calls";
   else if (qualityDominant && oneYearExpanded >= 7.3 && confidencePercent >= 72) filteredStrategy = "Buy Shares";

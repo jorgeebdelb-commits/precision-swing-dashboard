@@ -69,3 +69,9 @@ export type MarketRegime =
   | "Risk-On"
   | "Balanced"
   | "Risk-Off";
+
+export type RiskLabel =
+  | "Low"
+  | "Medium"
+  | "High"
+  | "Extreme";

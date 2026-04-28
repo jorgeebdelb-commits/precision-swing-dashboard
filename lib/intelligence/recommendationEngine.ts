@@ -1,5 +1,7 @@
+import type { RiskLabel } from "../../types/dashboard";
+
 export type ConfidenceLevel = "High" | "Medium" | "Low";
-export type RiskLevel = "Low" | "Medium" | "High" | "Extreme";
+export type RiskLevel = RiskLabel;
 
 export type StrategyRecommendation =
   | "Buy Shares"
