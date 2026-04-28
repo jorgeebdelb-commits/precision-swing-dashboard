@@ -15,6 +15,7 @@ interface IntelligenceDashboardShellProps {
 function recommendationColor(recommendation: AnalysisResult["rating"]): string {
   if (recommendation === "Strong Buy" || recommendation === "Buy") return "#22c55e";
   if (recommendation === "Watch") return "#f59e0b";
+  if (recommendation === "Neutral") return "#94a3b8";
   return "#ef4444";
 }
 

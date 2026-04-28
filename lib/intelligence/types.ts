@@ -4,17 +4,19 @@ export type AnalysisHorizon = HorizonKey;
 
 export type ConfidenceLevel = "High" | "Medium" | "Low";
 export type RiskLevel = "Low" | "Medium" | "High" | "Extreme";
-export type RatingLabel = "Strong Buy" | "Buy" | "Watch" | "Avoid";
+export type RatingLabel = "Strong Buy" | "Buy" | "Watch" | "Neutral" | "Avoid" | "Strong Avoid";
 export type StrategyRecommendation =
   | "Buy Shares"
+  | "Buy Calls"
+  | "Buy Shares + Calls"
+  | "Buy LEAPS"
+  | "Buy Puts"
+  | "Watchlist Only"
+  | "Avoid"
   | "Starter Shares"
   | "Starter Shares + Calls on Breakout"
   | "Hedge Only"
-  | "Buy Shares + Calls"
-  | "Buy Calls"
-  | "Watch"
-  | "Avoid"
-  | "Buy Puts";
+  | "Watch";
 
 export interface MarketContextSnapshot {
   price: number;
@@ -50,6 +52,14 @@ export interface AnalysisResult {
   confidence: ConfidenceLevel;
   risk: RiskLevel;
   reason: string;
+  topReasons?: string[];
+  layerScores?: {
+    technicalScore: number;
+    sentimentScore: number;
+    flowScore: number;
+    macroScore: number;
+    fundamentalScore: number;
+  };
   factorWeights: FactorWeight[];
   factorBreakdown: Record<string, number>;
 }
