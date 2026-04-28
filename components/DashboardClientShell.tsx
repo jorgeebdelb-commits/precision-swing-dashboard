@@ -36,6 +36,7 @@ type RowData = {
 type EngineKey = "swing" | "threeMonth" | "sixMonth" | "oneYear";
 type DecisionSignal = "Bullish" | "Bearish" | "Neutral";
 type Tradeability = "Full Size" | "Starter Size" | "Speculative" | "Avoid";
+type ActionState = "Ready" | "Setup" | "Extended" | "Breakdown";
 
 type RiskStyle = "Conservative" | "Balanced" | "Aggressive";
 type HorizonFocus = "Swing" | "3 Month" | "6 Month" | "1 Year";
@@ -227,6 +228,73 @@ function buildDecision(metrics: RowMetrics, engine: EngineKey): { signal: Decisi
   const risk = engineRisk(metrics, engine);
   const tradeability = tradeabilityFromDecision(signal, risk);
   return { signal, risk, tradeability };
+}
+
+function actionStateColor(state: ActionState): string {
+  if (state === "Ready") return "#22c55e";
+  if (state === "Setup") return "#f59e0b";
+  if (state === "Extended") return "#a855f7";
+  return "#ef4444";
+}
+
+function positionSizeForState(state: ActionState, tradeability: Tradeability): string {
+  if (state === "Extended") return "0.5%-1% add-on only";
+  if (state === "Breakdown") return "0%-1% hedge only";
+  if (tradeability === "Full Size") return "6%-8% full";
+  if (tradeability === "Starter Size") return "3%-5% starter";
+  if (tradeability === "Speculative") return "1%-3% tactical";
+  return "0%-1% defensive";
+}
+
+function strategyForState(state: ActionState, signal: DecisionSignal, strategy: Strategy): "shares" | "calls" | "puts" {
+  if (state === "Breakdown" || signal === "Bearish" || strategy === "Buy Puts") return "puts";
+  if (state === "Ready" && (strategy === "Buy Calls" || strategy === "Buy Shares + Calls")) return "calls";
+  return "shares";
+}
+
+function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey) {
+  const decision = buildDecision(metrics, engine);
+  const score = toDisplayScore(engineScore(metrics, engine));
+  const strategy = strategyForEngine(metrics, engine);
+  const price = num(item.price);
+  const support = num(item.support, price > 0 ? price * 0.96 : 0);
+  const resistance = num(item.resistance, price > 0 ? price * 1.06 : support + 1);
+  const validResistance = resistance > support ? resistance : support + Math.max(0.5, support * 0.03);
+  const width = Math.max(validResistance - support, Math.max(price * 0.03, 0.5));
+
+  const isExtended = price > 0 && price > validResistance * 1.01;
+  const isBreakdown = price > 0 && price < support * 0.995;
+  const state: ActionState = isBreakdown ? "Breakdown" : isExtended ? "Extended" : score >= 78 ? "Ready" : score >= 70 ? "Setup" : "Breakdown";
+  const confirmationCondition =
+    state === "Setup"
+      ? `Require confirmation: reclaim and hold above ${formatPrice(validResistance)} with volume > 1.2x.`
+      : "No extra confirmation required.";
+
+  const entryTrigger =
+    state === "Extended"
+      ? `Do not chase. Wait for pullback into ${formatPrice(Math.max(support, validResistance - width * 0.25))} - ${formatPrice(validResistance)} before entering.`
+      : state === "Breakdown"
+      ? `Breakdown active below ${formatPrice(support)}. Avoid longs; only act on weak bounces into ${formatPrice(support)}.`
+      : state === "Ready"
+      ? `Enter on hold above ${formatPrice(validResistance)} or pullback support hold near ${formatPrice(support + width * 0.2)}.`
+      : `Staging only: probe near ${formatPrice(support + width * 0.2)} and add only after breakout above ${formatPrice(validResistance)}.`;
+
+  const stopLoss =
+    state === "Breakdown" ? formatPrice(support + width * 0.08) : formatPrice(Math.max(support - width * 0.18, price * 0.82));
+  const target1 = formatPrice(validResistance + width * 0.4);
+  const target2 = formatPrice(validResistance + width * 0.85);
+
+  return {
+    state,
+    color: actionStateColor(state),
+    entryTrigger,
+    confirmationCondition,
+    stopLoss,
+    targetLevels: `${target1} / ${target2}`,
+    positionSize: positionSizeForState(state, decision.tradeability),
+    strategy: strategyForState(state, decision.signal, strategy),
+    decision,
+  };
 }
 
 function bestStrategy(metrics: RowMetrics): Strategy {
@@ -457,6 +525,7 @@ export default function DashboardClientShell() {
   const selectedItem = selectedRow?.item ?? null;
   const selectedMetrics = selectedRow?.metrics ?? null;
   const selectedDecision = selectedMetrics ? buildDecision(selectedMetrics, watchlistHorizon) : null;
+  const selectedActionPlan = selectedItem && selectedMetrics ? buildActionablePlan(selectedItem, selectedMetrics, watchlistHorizon) : null;
   const momentumLabel = selectedMetrics ? toMomentumLabel(selectedMetrics.momentumToday) : "Neutral";
   const momentumColor =
     momentumLabel === "Bullish" ? "#22c55e" : momentumLabel === "Bearish" ? "#ef4444" : "#f59e0b";
@@ -1533,12 +1602,12 @@ export default function DashboardClientShell() {
             {[
               ["Price", `$${selectedItem.price.toFixed(2)}`, "#f8fafc"],
               [
-                "Signal",
-                selectedDecision?.signal ?? "Neutral",
-                selectedDecision?.signal === "Bullish" ? "#22c55e" : selectedDecision?.signal === "Bearish" ? "#ef4444" : "#f59e0b",
+                "Action State",
+                selectedActionPlan?.state ?? "Setup",
+                selectedActionPlan?.color ?? "#f59e0b",
               ],
               ["Risk", selectedDecision?.risk ?? "Low", riskColor(selectedDecision?.risk ?? "Low")],
-              ["Tradeability", selectedDecision?.tradeability ?? "Starter Size", "#38bdf8"],
+              ["Position Size", selectedActionPlan?.positionSize ?? "3%-5% starter", "#38bdf8"],
               [
                 "Confidence",
                 `${selectedMetrics.confidencePercent}%`,
@@ -1554,7 +1623,7 @@ export default function DashboardClientShell() {
                 selectedMetrics.momentumToday,
                 scoreColor(selectedMetrics.momentumToday),
               ],
-              ["Swing Score", toDisplayScore(selectedMetrics.swing), scoreColor(toDisplayScore(selectedMetrics.swing))],
+              ["Strategy", selectedActionPlan?.strategy ?? "shares", "#67e8f9"],
             ].map((card) => (
               <div key={String(card[0])} style={statCardStyle()}>
                 <div style={{ fontSize: 12, color: "#94a3b8" }}>{card[0]}</div>
@@ -1593,24 +1662,28 @@ export default function DashboardClientShell() {
                 score: selectedMetrics.swing,
                 signal: selectedMetrics.recommendation,
                 strategy: selectedMetrics.swingStrategy,
+                action: buildActionablePlan(selectedItem, selectedMetrics, "swing"),
               },
               {
                 label: "3 Month",
                 score: selectedMetrics.threeMonth,
                 signal: selectedMetrics.threeMonthSignal,
                 strategy: selectedMetrics.threeMonthStrategy,
+                action: buildActionablePlan(selectedItem, selectedMetrics, "threeMonth"),
               },
               {
                 label: "6 Month",
                 score: selectedMetrics.sixMonth,
                 signal: selectedMetrics.sixMonthSignal,
                 strategy: selectedMetrics.sixMonthStrategy,
+                action: buildActionablePlan(selectedItem, selectedMetrics, "sixMonth"),
               },
               {
                 label: "1 Year",
                 score: selectedMetrics.oneYear,
                 signal: selectedMetrics.oneYearSignal,
                 strategy: selectedMetrics.oneYearStrategy,
+                action: buildActionablePlan(selectedItem, selectedMetrics, "oneYear"),
               },
             ].map((card) => (
               <div
@@ -1628,13 +1701,16 @@ export default function DashboardClientShell() {
                   style={{
                     marginTop: 4,
                     fontWeight: 800,
-                    color: signalColor(card.signal),
+                    color: card.action.color,
                   }}
                 >
-                  {card.signal}
+                  {card.action.state}
                 </div>
                 <div style={{ marginTop: 8, fontSize: 13, color: "#cbd5e1" }}>
-                  {card.strategy}
+                  {card.action.entryTrigger}
+                </div>
+                <div style={{ marginTop: 6, fontSize: 12, color: "#94a3b8" }}>
+                  {card.action.confirmationCondition}
                 </div>
               </div>
             ))}
@@ -1782,11 +1858,12 @@ export default function DashboardClientShell() {
               heading="h4"
               content="Entry zone helps avoid chasing price. Stop loss defines your planned downside. Targets help you scale profits, and position size helps control total portfolio risk."
             />
-            <p><b>Entry Zone:</b> {selectedMetrics.entryZone}</p>
-            <p><b>Stop Loss:</b> {selectedMetrics.stopLoss}</p>
-            <p><b>Target 1:</b> {selectedMetrics.target1}</p>
-            <p><b>Target 2:</b> {selectedMetrics.target2}</p>
-            <p><b>Position Size:</b> {selectedMetrics.positionSizing}</p>
+            <p><b>State:</b> <span style={{ color: selectedActionPlan?.color ?? "#f59e0b" }}>{selectedActionPlan?.state ?? "Setup"}</span></p>
+            <p><b>Entry Trigger:</b> {selectedActionPlan?.entryTrigger ?? selectedMetrics.entryZone}</p>
+            <p><b>Confirmation:</b> {selectedActionPlan?.confirmationCondition ?? "No extra confirmation required."}</p>
+            <p><b>Stop Loss:</b> {selectedActionPlan?.stopLoss ?? selectedMetrics.stopLoss}</p>
+            <p><b>Target Levels:</b> {selectedActionPlan?.targetLevels ?? `${selectedMetrics.target1} / ${selectedMetrics.target2}`}</p>
+            <p><b>Position Size:</b> {selectedActionPlan?.positionSize ?? selectedMetrics.positionSizing}</p>
           </div>
 
           <div style={{ ...panelStyle(), padding: 16 }}>
@@ -1795,7 +1872,8 @@ export default function DashboardClientShell() {
               heading="h4"
               content="These notes explain why the system favors shares, calls, or puts. Breakout confirmation means price strength is proving itself. Calls can be avoided when risk or timing uncertainty is elevated."
             />
-            <p><b>Action:</b> {selectedMetrics.strategy}</p>
+            <p><b>Action:</b> {selectedActionPlan?.state ?? selectedMetrics.strategy}</p>
+            <p><b>Vehicle:</b> {selectedActionPlan?.strategy ?? "shares"}</p>
             <p><b>Signal:</b> {selectedDecision?.signal ?? "Neutral"}</p>
             <p><b>Risk:</b> {selectedDecision?.risk ?? "Low"}</p>
             <p><b>Tradeability:</b> {selectedDecision?.tradeability ?? "Starter Size"}</p>
@@ -1887,7 +1965,7 @@ export default function DashboardClientShell() {
           </div>
           <InfoHelp
             title="Horizon Engines"
-            content="Swing, 3 Month, 6 Month, and 1 Year+ are independent engines with separate weights. Symbols can be Buy in one horizon and Watch in another."
+            content="Swing, 3 Month, 6 Month, and 1 Year+ are independent engines with separate weights. The decision layer converts each horizon into Ready, Setup, Extended, or Breakdown actions."
             placement="bottom"
           />
         </div>
@@ -1899,7 +1977,7 @@ export default function DashboardClientShell() {
                 width: "100%",
                 borderCollapse: "collapse",
                 fontSize: 13,
-                minWidth: 1320,
+                minWidth: 1880,
                 color: "#e2e8f0",
               }}
             >
@@ -1911,15 +1989,20 @@ export default function DashboardClientShell() {
                   <th style={{ padding: 9, textAlign: "center" }}>6M Score / Verdict</th>
                   <th style={{ padding: 9, textAlign: "center" }}>1Y+ Score / Verdict</th>
                   <th style={{ padding: 9, textAlign: "center" }}>Best Strategy</th>
-                  <th style={{ padding: 9, textAlign: "center" }}>Signal</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Decision State</th>
                   <th style={{ padding: 9, textAlign: "center" }}>Risk</th>
-                  <th style={{ padding: 9, textAlign: "center" }}>Tradeability</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Entry Trigger</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Stop</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Targets</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Size</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Vehicle</th>
                   <th style={{ padding: 9, textAlign: "center" }}>Action</th>
                 </tr>
               </thead>
               <tbody>
                 {sortedRows.map(({ item, metrics }) => {
               const decision = buildDecision(metrics, watchlistHorizon);
+              const actionPlan = buildActionablePlan(item, metrics, watchlistHorizon);
               return (
               <tr
                 key={item.symbol}
@@ -1968,9 +2051,13 @@ export default function DashboardClientShell() {
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 800 }}>
                   {bestStrategy(metrics)}
                 </td>
-                <td style={{ padding: 9, textAlign: "center", fontWeight: 800, color: decision.signal === "Bullish" ? "#22c55e" : decision.signal === "Bearish" ? "#ef4444" : "#f59e0b" }}>{decision.signal}</td>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 800, color: actionPlan.color }}>{actionPlan.state}</td>
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 800, color: riskColor(decision.risk) }}>{decision.risk}</td>
-                <td style={{ padding: 9, textAlign: "center", fontWeight: 800 }}>{decision.tradeability}</td>
+                <td style={{ padding: 9, textAlign: "left", fontSize: 12, minWidth: 220 }}>{actionPlan.entryTrigger}</td>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 700 }}>{actionPlan.stopLoss}</td>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 700 }}>{actionPlan.targetLevels}</td>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 700 }}>{actionPlan.positionSize}</td>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 700, textTransform: "uppercase" }}>{actionPlan.strategy}</td>
 
                 <td style={{ padding: 9, textAlign: "center" }}>
                   <button
