@@ -19,34 +19,42 @@ function toRisk(volatility: number): RiskLevel {
   return "Low";
 }
 
-function confidenceFromLayers(params: { layerScores: ReturnType<typeof deriveLayerScores>; risk: RiskLevel }): AnalysisResult["confidence"] {
-  const { layerScores, risk } = params;
-  const spread =
-    Math.max(
-      layerScores.technicalScore,
-      layerScores.sentimentScore,
-      layerScores.flowScore,
-      layerScores.macroScore,
-      layerScores.fundamentalScore
-    ) -
-    Math.min(
-      layerScores.technicalScore,
-      layerScores.sentimentScore,
-      layerScores.flowScore,
-      layerScores.macroScore,
-      layerScores.fundamentalScore
-    );
+function confidenceFromLayers(params: {
+  layerScores: ReturnType<typeof deriveLayerScores>;
+  marketContext: MarketContextSnapshot;
+  factorBreakdown: Record<string, number>;
+  risk: RiskLevel;
+}): AnalysisResult["confidence"] {
+  const { layerScores, marketContext, factorBreakdown, risk } = params;
 
-  const avgScore =
-    (layerScores.technicalScore +
-      layerScores.sentimentScore +
-      layerScores.flowScore +
-      layerScores.macroScore +
-      layerScores.fundamentalScore) /
-    5;
+  const trendAlignment = ((layerScores.technicalScore + layerScores.flowScore) / 2) * 0.35;
+  const volumeConfirmation = Math.min(100, marketContext.volumeRatio * 70) * 0.14;
+  const volatilityStability = Math.max(0, 100 - marketContext.volatility * 18) * 0.16;
+  const sectorStrength = (factorBreakdown.sectorTrend ?? factorBreakdown.industryLeadership ?? marketContext.macroScore) * 10 * 0.14;
+  const signalAgreement =
+    (100 -
+      (Math.max(
+        layerScores.technicalScore,
+        layerScores.sentimentScore,
+        layerScores.flowScore,
+        layerScores.macroScore,
+        layerScores.fundamentalScore
+      ) -
+        Math.min(
+          layerScores.technicalScore,
+          layerScores.sentimentScore,
+          layerScores.flowScore,
+          layerScores.macroScore,
+          layerScores.fundamentalScore
+        ))) * 0.12;
+  const newsClarity = layerScores.sentimentScore * 0.09;
 
-  if (avgScore >= 80 && spread <= 22 && (risk === "Low" || risk === "Medium")) return "High";
-  if (avgScore >= 62 && spread <= 35) return "Medium";
+  const riskPenalty = risk === "Extreme" ? 9 : risk === "High" ? 5 : risk === "Medium" ? 2 : 0;
+  const confidenceScore =
+    trendAlignment + volumeConfirmation + volatilityStability + sectorStrength + signalAgreement + newsClarity - riskPenalty;
+
+  if (confidenceScore >= 72) return "High";
+  if (confidenceScore >= 52) return "Medium";
   return "Low";
 }
 
@@ -88,7 +96,12 @@ export function finalizePipeline(params: {
     score: decision.finalScore,
     rating: validated.rating,
     strategy: validated.strategy,
-    confidence: confidenceFromLayers({ layerScores, risk }),
+    confidence: confidenceFromLayers({
+      layerScores,
+      marketContext: params.marketContext,
+      factorBreakdown: params.factorBreakdown,
+      risk,
+    }),
     risk,
     reason: `${buildReasonText({ symbol: params.symbol, horizon: params.horizon, rating: validated.rating, reasons: topReasons })}${
       validated.warningReason ? ` ${validated.warningReason}` : ""

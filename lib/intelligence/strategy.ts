@@ -17,6 +17,7 @@ export function recommendStrategy(params: {
 
   if (horizon === "swing") {
     if (momentum >= 80 && layerScores.sentimentScore >= 65 && finalScore >= 80) return "Buy Calls";
+    if (momentum >= 68 && finalScore >= 60 && finalScore < 74 && layerScores.macroScore < 58) return "Speculative Buy";
     if (momentum >= 75 && finalScore >= 85) return "Buy Shares + Calls";
     if (finalScore >= 75) return "Buy Shares";
     if (bearishShortTerm) return "Buy Puts";
