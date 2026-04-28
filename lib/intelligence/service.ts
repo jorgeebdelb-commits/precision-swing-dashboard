@@ -56,6 +56,12 @@ function resolveBestHorizon(analyses: IntelligenceSymbolSummary["analyses"]): An
   return top?.horizon ?? "swing";
 }
 
+
+function toTenScale(score: number): number {
+  if (score <= 10) return Number(score.toFixed(2));
+  return Number((score / 10).toFixed(2));
+}
+
 function firstNumber(value: string | undefined): number | null {
   if (!value) return null;
   const match = value.match(/-?\\d+(\\.\\d+)?/);
@@ -269,7 +275,7 @@ export async function getIntelligence(
             strategy: analysis.strategy,
             confidence: analysis.confidence,
             risk: analysis.risk,
-            score: analysis.score,
+            score: toTenScale(analysis.score),
             entryPrice: context.price || null,
             factorWeights,
             factorBreakdown: analysis.factorBreakdown,
@@ -280,7 +286,7 @@ export async function getIntelligence(
 
         const scoreMap = analyses.reduce<Partial<Record<"swing" | "threeMonth" | "sixMonth" | "oneYear", number>>>(
           (acc, analysis) => {
-            acc[analysis.horizon] = analysis.score;
+            acc[analysis.horizon] = toTenScale(analysis.score);
             return acc;
           },
           {}
@@ -342,9 +348,9 @@ export async function getIntelligence(
           symbol,
           price: context.price,
           sector: context.sector,
-          selectedHorizonScores: analyses.reduce((acc, a) => ({ ...acc, [a.horizon]: a.score }), {}),
+          selectedHorizonScores: analyses.reduce((acc, a) => ({ ...acc, [a.horizon]: toTenScale(a.score) }), {}),
           technicalScore: context.technicalScore,
-          fundamentalScore: analyses.reduce((sum, a) => sum + a.score, 0) / Math.max(1, analyses.length),
+          fundamentalScore: analyses.reduce((sum, a) => sum + toTenScale(a.score), 0) / Math.max(1, analyses.length),
           sentimentScore: context.newsSentiment,
           environmentScore: (context.macroScore + context.politicalScore) / 2,
           momentum: context.flowScore,
