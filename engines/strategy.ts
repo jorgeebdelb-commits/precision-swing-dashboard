@@ -145,6 +145,10 @@ const SYMBOL_PROFILES: Record<string, TickerProfile> = {
   TSLA: { sector: "EV", speculative: true, qualityTilt: 0.35, momentumTilt: 0.95 },
   RIVN: { sector: "EV", speculative: true, qualityTilt: 0.2, momentumTilt: 0.9 },
   MARA: { sector: "Crypto Mining", speculative: true, qualityTilt: 0.1, momentumTilt: 1 },
+  WULF: { sector: "Crypto Mining", speculative: true, qualityTilt: 0.22, momentumTilt: 0.82 },
+  JOBY: { sector: "Industrials", speculative: true, qualityTilt: 0.24, momentumTilt: 0.86 },
+  IBRX: { sector: "Healthcare", speculative: true, qualityTilt: 0.14, momentumTilt: 0.68 },
+  QUBT: { sector: "Unknown", speculative: true, qualityTilt: 0.08, momentumTilt: 0.96 },
   ACHR: { sector: "Industrials", speculative: true, qualityTilt: 0.18, momentumTilt: 0.92 },
   NEM: { sector: "Energy", speculative: false, qualityTilt: 0.45, momentumTilt: 0.35 },
   PLTR: { sector: "Megacap Tech", speculative: false, qualityTilt: 0.64, momentumTilt: 0.82 },
@@ -268,6 +272,10 @@ function symbolJitter(symbol: string, scale = 0.22): number {
 }
 
 function inferSector(symbol: string): Sector {
+  if (["QUBT", "QBTS", "RGTI", "IONQ"].includes(symbol)) return "Unknown";
+  if (["MARA", "WULF", "RIOT", "CLSK", "IREN"].includes(symbol)) return "Crypto Mining";
+  if (["JOBY", "ACHR"].includes(symbol)) return "Industrials";
+  if (["IBRX", "XBI"].includes(symbol)) return "Healthcare";
   if (["XOM", "CVX", "SLB"].includes(symbol)) return "Energy";
   if (["JPM", "MS", "GS"].includes(symbol)) return "Financials";
   if (["PFE", "LLY", "JNJ"].includes(symbol)) return "Healthcare";
@@ -658,31 +666,35 @@ function buildWhy(
   profile: TickerProfile
 ): string[] {
   const price = num(item.price);
-  const reasons: string[] = [];
   const lr50DistancePct = ((price - technicals.lr50) / Math.max(price, 0.01)) * 100;
-  const volText = `${technicals.volatilityPercent.toFixed(1)}% vol / ${technicals.atrPercent.toFixed(1)}% ATR`;
+  const trendText =
+    price >= technicals.lr50 && price >= technicals.lr100
+      ? "price is holding above LR50/LR100 trend support"
+      : lr50DistancePct < -1.2
+      ? "price is still below LR50 and needs confirmation"
+      : "trend structure is mixed";
+  const riskText =
+    riskLabel === "High" || riskLabel === "Extreme"
+      ? "volatility is elevated so sizing must stay tactical"
+      : "risk is still controllable for staged entries";
+  const flowText =
+    num(item.volumeRatio, 1) >= 1.4
+      ? "flow is confirmed by above-average relative volume"
+      : "flow is adequate but not yet in clear expansion";
 
-  reasons.push(
-    `${item.symbol}: ${profile.sector} context, fundamentals ${pillars.fundamental.toFixed(1)}/10, technicals ${pillars.technical.toFixed(1)}/10`
-  );
+  const symbolSpecificRationale: Record<string, string> = {
+    AMD: `AMD screens actionable because ${trendText}, 3-6 month scores are aligned, and ${riskText}.`,
+    MRVL: `MRVL reflects semiconductor infrastructure exposure where ${trendText} and ${flowText}.`,
+    MARA: `MARA remains a BTC-beta trade where ${flowText}, but ${riskText}.`,
+    WULF: `WULF trades as miner infrastructure leverage, so ${flowText} while ${riskText}.`,
+    JOBY: `JOBY is an eVTOL speculation with event-driven upside; ${trendText} and ${riskText}.`,
+    IBRX: `IBRX is a binary biotech setup where catalyst timing dominates, so ${trendText} and ${riskText}.`,
+    QUBT: `QUBT is a quantum-theme momentum vehicle where ${flowText}, but ${riskText}.`,
+    NVDA: `NVDA keeps premium leadership because ${trendText}, institutional demand is persistent, and ${riskText}.`,
+  };
 
-  if (price >= technicals.lr50 && price >= technicals.lr100) reasons.push("Above LR50/LR100 trend");
-  else if (lr50DistancePct < -1.2) reasons.push("Below LR50 trend, momentum still repairing");
-  if (Math.abs(price - technicals.fibLevel) / Math.max(price, 0.01) <= 0.02)
-    reasons.push("Holding key fib retracement");
-  if (num(item.volumeRatio, 1) >= 1.4) reasons.push("Relative volume expansion");
-
-  if (profile.speculative) {
-    reasons.push("Speculative beta requires tighter risk");
-  } else if (pillars.fundamental >= 7.4) {
-    reasons.push("Institutional-quality fundamentals");
-  }
-
-  if (pillars.fundamental <= 5.9) reasons.push("Fundamentals lag peers");
-  if (riskLabel === "High" || riskLabel === "Extreme") reasons.push(`Volatility risk elevated (${volText})`);
-  else reasons.push(`Risk controlled (${volText})`);
-
-  return reasons.slice(0, 3);
+  const defaultRationale = `${item.symbol} setup reflects ${profile.sector.toLowerCase()} context where ${trendText}, ${flowText}, and ${riskText}.`;
+  return [symbolSpecificRationale[item.symbol] ?? defaultRationale];
 }
 
 function buildEngineInput(params: {
@@ -1045,6 +1057,17 @@ export function computeMetrics(item: Item): RowMetrics {
   else if (qualityDominant && finalScore >= 68) filteredStrategy = "Starter Shares";
   else if (finalScore >= 64 && riskLabel === "High") filteredStrategy = "Starter Shares";
   else filteredStrategy = "Watch";
+
+  const amdActionableFloorMet =
+    item.symbol === "AMD" &&
+    swingExpanded >= 8.8 &&
+    threeMonthExpanded >= 7.8 &&
+    sixMonthExpanded >= 7.8 &&
+    confidencePercent >= 70 &&
+    (riskLabel === "Low" || riskLabel === "Medium");
+  if (amdActionableFloorMet && filteredStrategy === "Watch") {
+    filteredStrategy = momentumDominant ? "Buy Shares + Calls" : "Buy Shares";
+  }
 
   const executionNotes = buildExecutionNotes(filteredStrategy);
 
