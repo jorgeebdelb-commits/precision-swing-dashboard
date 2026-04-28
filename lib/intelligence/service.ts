@@ -61,6 +61,27 @@ const SYMBOL_SECTOR_FALLBACK: Record<string, string> = {
   MARA: "Crypto Mining",
   RIOT: "Crypto Mining",
   KEEL: "Defense",
+  NEM: "Materials",
+  PLTR: "Technology",
+};
+
+type SymbolCategoryModifier = {
+  technical: number;
+  macro: number;
+  political: number;
+  flow: number;
+  news: number;
+  volatility: number;
+};
+
+const SYMBOL_CATEGORY_MODIFIERS: Record<string, SymbolCategoryModifier> = {
+  NVDA: { technical: 0.95, macro: 0.35, political: 0.1, flow: 0.9, news: 0.85, volatility: 0.35 },
+  AMD: { technical: 0.55, macro: 0.2, political: 0.05, flow: 0.45, news: 0.4, volatility: 0.45 },
+  AMZN: { technical: 0.35, macro: 0.45, political: 0.1, flow: 0.3, news: 0.3, volatility: 0.1 },
+  MARA: { technical: 0.2, macro: 0.1, political: 0.2, flow: 0.5, news: 0.3, volatility: 1.2 },
+  NEM: { technical: -0.05, macro: 0.4, political: 0.35, flow: -0.1, news: 0.15, volatility: -0.35 },
+  PLTR: { technical: 0.45, macro: 0.1, political: -0.05, flow: 0.5, news: 0.45, volatility: 0.55 },
+  TSLA: { technical: 0.35, macro: -0.1, political: -0.15, flow: 0.4, news: 0.3, volatility: 0.95 },
 };
 
 const SECTOR_CONTEXT_FALLBACK: Record<
@@ -158,16 +179,38 @@ async function buildMarketContext(symbols: string[]): Promise<Record<string, Mar
   }, {});
 
   return watchRows.reduce<Record<string, MarketContextSnapshot>>((acc, row) => {
-    const sector = resolveSector(row.symbol, null);
+    const upperSymbol = row.symbol.toUpperCase();
+    const sector = resolveSector(upperSymbol, null);
     const sectorDefaults = SECTOR_CONTEXT_FALLBACK[sector ?? ""] ?? SECTOR_CONTEXT_FALLBACK.__DEFAULT__;
-    const technical = toScore10(sectorDefaults.technical);
-    const macro = toScore10(sectorDefaults.macro);
-    const political = toScore10(sectorDefaults.political);
-    const rsi = 50;
-    const volumeRatio = 1;
-    const volatility = sectorDefaults.volatility;
-    const flowScore = toScore10(avg(flowMap[row.symbol] ?? [], sectorDefaults.flow));
-    const newsSentiment = toScore10(avg(newsMap[row.symbol] ?? [], sectorDefaults.news));
+    const symbolMod = SYMBOL_CATEGORY_MODIFIERS[upperSymbol];
+    const flowRaw = avg(flowMap[row.symbol] ?? [], sectorDefaults.flow);
+    const newsRaw = avg(newsMap[row.symbol] ?? [], sectorDefaults.news);
+    const flowScore = toScore10(flowRaw + (symbolMod?.flow ?? 0));
+    const newsSentiment = toScore10(newsRaw + (symbolMod?.news ?? 0));
+    const technical = toScore10(
+      sectorDefaults.technical +
+        (flowScore - 5) * 2.8 +
+        (newsSentiment - 5) * 1.4 +
+        (symbolMod?.technical ?? 0)
+    );
+    const macro = toScore10(
+      sectorDefaults.macro +
+        (symbolMod?.macro ?? 0) +
+        (sector === "Crypto Mining" ? (flowScore - 5) * 1.2 : 0)
+    );
+    const political = toScore10(
+      sectorDefaults.political + (symbolMod?.political ?? 0) + (newsSentiment - 5) * 0.7
+    );
+    const rsi = Math.max(32, Math.min(74, Math.round(47 + (flowScore - 5) * 6 + (technical - 5) * 1.8)));
+    const volumeRatio = Number(
+      Math.max(0.72, Math.min(2.8, 0.92 + (flowScore - 5) * 0.18 + (symbolMod?.flow ?? 0) * 0.04)).toFixed(2)
+    );
+    const volatility = Number(
+      Math.max(
+        1.2,
+        Math.min(4.4, sectorDefaults.volatility + (symbolMod?.volatility ?? 0) + Math.max(0, 6 - flowScore) * 0.12)
+      ).toFixed(2)
+    );
 
     acc[row.symbol] = {
       price: 0,

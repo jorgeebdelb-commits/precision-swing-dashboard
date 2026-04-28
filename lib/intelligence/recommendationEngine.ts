@@ -26,6 +26,13 @@ export type RecommendationEngineInput = {
   momentum: number;
   volatility: number;
   riskLevel: RiskLevel;
+  trendConsistency: number;
+  volumeConfirmation: number;
+  distanceFromResistance: number;
+  volatilityStability: number;
+  multiTimeframeAgreement: number;
+  sectorStrength: number;
+  newsClarity: number;
 };
 
 export type RecommendationEngineOutput = {
@@ -58,26 +65,31 @@ function baseConfidence(input: RecommendationEngineInput): ConfidenceLevel {
   const alignmentMin = Math.min(...horizonScores);
   const alignmentMax = Math.max(...horizonScores);
   const spread = alignmentMax - alignmentMin;
-  const bullishCount = horizonScores.filter((score) => score >= 7.2).length;
-  const bearishCount = horizonScores.filter((score) => score <= 5.2).length;
-  const factorAgreement = Math.abs(bullishCount - bearishCount);
+  const confidenceComposite =
+    input.trendConsistency * 0.2 +
+    input.volumeConfirmation * 0.11 +
+    input.distanceFromResistance * 0.11 +
+    input.volatilityStability * 0.16 +
+    input.multiTimeframeAgreement * 0.17 +
+    input.sectorStrength * 0.13 +
+    input.newsClarity * 0.12;
 
   const convictionScore =
-    input.swingScore * 0.26 +
-    input.threeMonthScore * 0.24 +
-    input.sixMonthScore * 0.25 +
-    input.oneYearScore * 0.17 +
-    input.technicalScore * 0.06 +
-    input.fundamentalScore * 0.04;
+    input.swingScore * 0.2 +
+    input.threeMonthScore * 0.2 +
+    input.sixMonthScore * 0.2 +
+    input.oneYearScore * 0.16 +
+    input.technicalScore * 0.12 +
+    input.fundamentalScore * 0.12;
 
-  const volatilityDrag = input.volatility >= 8 ? 0.5 : input.volatility >= 6.8 ? 0.25 : 0;
-  const adjustedConviction = convictionScore - volatilityDrag;
+  const volatilityDrag = input.volatility >= 8 ? 0.55 : input.volatility >= 6.8 ? 0.3 : 0;
+  const adjustedConviction = convictionScore * 0.56 + confidenceComposite * 0.44 - volatilityDrag;
 
-  if (adjustedConviction >= 8.1 && spread <= 2.3 && factorAgreement >= 2 && riskToNumeric[input.riskLevel] <= 3) {
+  if (adjustedConviction >= 8.1 && spread <= 2.2 && riskToNumeric[input.riskLevel] <= 3) {
     return "High";
   }
-  if (adjustedConviction >= 6.0 && spread <= 4.2) {
-    return bearishCount >= 3 && bullishCount === 0 ? "Low" : "Medium";
+  if (adjustedConviction >= 6.0 && spread <= 4.4) {
+    return adjustedConviction < 6.5 && input.multiTimeframeAgreement < 5.4 ? "Low" : "Medium";
   }
   return "Low";
 }
@@ -138,13 +150,13 @@ export function evaluateRecommendation(input: RecommendationEngineInput): Recomm
     strategy = "Buy Calls";
     confidence = confidence === "Low" ? "Medium" : confidence;
     reason = "High composite score with contained volatility supports call exposure.";
-  } else if (averageScore >= 7.1 && riskNumeric <= 3) {
+  } else if (averageScore >= 6.9 && riskNumeric <= 3) {
     rating = scoreToRating(averageScore);
-    strategy = riskNumeric <= 2 ? "Buy Shares" : "Starter Shares";
+    strategy = riskNumeric <= 2 && input.multiTimeframeAgreement >= 6.2 ? "Buy Shares" : "Starter Shares";
     reason = strategy === "Buy Shares" ? "Broad score alignment supports share accumulation." : "Bullish score but risk is elevated; size positions carefully.";
   } else if (averageScore >= 5.5) {
     rating = "Watch";
-    strategy = riskNumeric >= 3 && averageScore < 6.3 ? "Watch" : "Starter Shares";
+    strategy = riskNumeric >= 3 && averageScore < 6.3 ? "Watch" : input.trendConsistency >= 6.4 ? "Starter Shares" : "Watch";
     confidence = confidence === "High" ? "Medium" : confidence;
     reason = riskNumeric >= 3 ? "Setup needs confirmation before new entries." : "Early setup forming; start small only.";
   } else {
