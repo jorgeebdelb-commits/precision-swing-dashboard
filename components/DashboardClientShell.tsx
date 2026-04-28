@@ -34,6 +34,8 @@ type RowData = {
 };
 
 type EngineKey = "swing" | "threeMonth" | "sixMonth" | "oneYear";
+type DecisionSignal = "Bullish" | "Bearish" | "Neutral";
+type Tradeability = "Full Size" | "Starter Size" | "Speculative" | "Avoid";
 
 type RiskStyle = "Conservative" | "Balanced" | "Aggressive";
 type HorizonFocus = "Swing" | "3 Month" | "6 Month" | "1 Year";
@@ -180,6 +182,51 @@ function engineRisk(metrics: RowMetrics, engine: EngineKey): RiskLabel {
   if (riskNumber >= 2.8) return "High";
   if (riskNumber >= 1.9) return "Medium";
   return "Low";
+}
+
+function strategyForEngine(metrics: RowMetrics, engine: EngineKey): Strategy {
+  if (engine === "swing") return metrics.swingStrategy;
+  if (engine === "threeMonth") return metrics.threeMonthStrategy;
+  if (engine === "sixMonth") return metrics.sixMonthStrategy;
+  return metrics.oneYearStrategy;
+}
+
+function decisionSignal(metrics: RowMetrics, engine: EngineKey): DecisionSignal {
+  const strategy = strategyForEngine(metrics, engine);
+  if (strategy === "Avoid" || strategy === "Buy Puts") return "Bearish";
+  if (
+    strategy === "Buy Shares" ||
+    strategy === "Spec Buy" ||
+    strategy === "Buy Shares + Calls" ||
+    strategy === "Buy Calls" ||
+    strategy === "Starter Shares" ||
+    strategy === "Starter Shares + Calls on Breakout"
+  ) {
+    return "Bullish";
+  }
+  const verdict = engineVerdict(metrics, engine);
+  if (verdict === "Strong Buy" || verdict === "Buy") return "Bullish";
+  if (verdict === "Caution" || verdict === "Avoid" || verdict === "Strong Avoid") return "Bearish";
+  return "Neutral";
+}
+
+function tradeabilityFromDecision(signal: DecisionSignal, risk: RiskLabel): Tradeability {
+  if (risk === "Extreme") return "Speculative";
+  if (signal === "Bearish") return "Avoid";
+  if (signal === "Bullish") {
+    if (risk === "Low") return "Full Size";
+    if (risk === "Medium") return "Starter Size";
+    return "Speculative";
+  }
+  if (risk === "Low" || risk === "Medium") return "Starter Size";
+  return "Speculative";
+}
+
+function buildDecision(metrics: RowMetrics, engine: EngineKey): { signal: DecisionSignal; risk: RiskLabel; tradeability: Tradeability } {
+  const signal = decisionSignal(metrics, engine);
+  const risk = engineRisk(metrics, engine);
+  const tradeability = tradeabilityFromDecision(signal, risk);
+  return { signal, risk, tradeability };
 }
 
 function bestStrategy(metrics: RowMetrics): Strategy {
@@ -409,6 +456,7 @@ export default function DashboardClientShell() {
 
   const selectedItem = selectedRow?.item ?? null;
   const selectedMetrics = selectedRow?.metrics ?? null;
+  const selectedDecision = selectedMetrics ? buildDecision(selectedMetrics, watchlistHorizon) : null;
   const momentumLabel = selectedMetrics ? toMomentumLabel(selectedMetrics.momentumToday) : "Neutral";
   const momentumColor =
     momentumLabel === "Bullish" ? "#22c55e" : momentumLabel === "Bearish" ? "#ef4444" : "#f59e0b";
@@ -1484,8 +1532,13 @@ export default function DashboardClientShell() {
             </div>
             {[
               ["Price", `$${selectedItem.price.toFixed(2)}`, "#f8fafc"],
-              ["Risk Label", selectedMetrics.riskLabel, riskColor(selectedMetrics.riskLabel)],
-              ["Risk Score", `${selectedMetrics.riskScore}`, "#f8fafc"],
+              [
+                "Signal",
+                selectedDecision?.signal ?? "Neutral",
+                selectedDecision?.signal === "Bullish" ? "#22c55e" : selectedDecision?.signal === "Bearish" ? "#ef4444" : "#f59e0b",
+              ],
+              ["Risk", selectedDecision?.risk ?? "Low", riskColor(selectedDecision?.risk ?? "Low")],
+              ["Tradeability", selectedDecision?.tradeability ?? "Starter Size", "#38bdf8"],
               [
                 "Confidence",
                 `${selectedMetrics.confidencePercent}%`,
@@ -1502,7 +1555,6 @@ export default function DashboardClientShell() {
                 scoreColor(selectedMetrics.momentumToday),
               ],
               ["Swing Score", toDisplayScore(selectedMetrics.swing), scoreColor(toDisplayScore(selectedMetrics.swing))],
-              ["Action", selectedMetrics.strategy, "#38bdf8"],
             ].map((card) => (
               <div key={String(card[0])} style={statCardStyle()}>
                 <div style={{ fontSize: 12, color: "#94a3b8" }}>{card[0]}</div>
@@ -1744,6 +1796,9 @@ export default function DashboardClientShell() {
               content="These notes explain why the system favors shares, calls, or puts. Breakout confirmation means price strength is proving itself. Calls can be avoided when risk or timing uncertainty is elevated."
             />
             <p><b>Action:</b> {selectedMetrics.strategy}</p>
+            <p><b>Signal:</b> {selectedDecision?.signal ?? "Neutral"}</p>
+            <p><b>Risk:</b> {selectedDecision?.risk ?? "Low"}</p>
+            <p><b>Tradeability:</b> {selectedDecision?.tradeability ?? "Starter Size"}</p>
             <p><b>Calls:</b> {selectedMetrics.callPlan}</p>
             <p><b>Puts:</b> {selectedMetrics.putPlan}</p>
             <p><b>Session:</b> {quoteMeta?.session ?? "-"}</p>
@@ -1856,12 +1911,16 @@ export default function DashboardClientShell() {
                   <th style={{ padding: 9, textAlign: "center" }}>6M Score / Verdict</th>
                   <th style={{ padding: 9, textAlign: "center" }}>1Y+ Score / Verdict</th>
                   <th style={{ padding: 9, textAlign: "center" }}>Best Strategy</th>
-                  <th style={{ padding: 9, textAlign: "left" }}>Risk by Timeframe</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Signal</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Risk</th>
+                  <th style={{ padding: 9, textAlign: "center" }}>Tradeability</th>
                   <th style={{ padding: 9, textAlign: "center" }}>Action</th>
                 </tr>
               </thead>
               <tbody>
-                {sortedRows.map(({ item, metrics }) => (
+                {sortedRows.map(({ item, metrics }) => {
+              const decision = buildDecision(metrics, watchlistHorizon);
+              return (
               <tr
                 key={item.symbol}
                 style={{
@@ -1909,12 +1968,9 @@ export default function DashboardClientShell() {
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 800 }}>
                   {bestStrategy(metrics)}
                 </td>
-                <td style={{ padding: 9, textAlign: "left", maxWidth: 360, fontSize: 12, lineHeight: 1.45 }}>
-                  Swing: <span style={{ color: riskColor(engineRisk(metrics, "swing")) }}>{engineRisk(metrics, "swing")}</span>
-                  {" • "}3M: <span style={{ color: riskColor(engineRisk(metrics, "threeMonth")) }}>{engineRisk(metrics, "threeMonth")}</span>
-                  {" • "}6M: <span style={{ color: riskColor(engineRisk(metrics, "sixMonth")) }}>{engineRisk(metrics, "sixMonth")}</span>
-                  {" • "}1Y+: <span style={{ color: riskColor(engineRisk(metrics, "oneYear")) }}>{engineRisk(metrics, "oneYear")}</span>
-                </td>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 800, color: decision.signal === "Bullish" ? "#22c55e" : decision.signal === "Bearish" ? "#ef4444" : "#f59e0b" }}>{decision.signal}</td>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 800, color: riskColor(decision.risk) }}>{decision.risk}</td>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 800 }}>{decision.tradeability}</td>
 
                 <td style={{ padding: 9, textAlign: "center" }}>
                   <button
@@ -1933,7 +1989,8 @@ export default function DashboardClientShell() {
                   </button>
                 </td>
               </tr>
-                ))}
+              );
+                })}
               </tbody>
             </table>
             {!sortedRows.length ? (
