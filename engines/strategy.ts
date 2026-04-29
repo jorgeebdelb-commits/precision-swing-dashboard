@@ -348,7 +348,7 @@ function applyTickerRiskBucket(symbol: string, risk10: number): RiskLabel {
   const bucket = TICKER_RISK_BUCKETS[symbol.toUpperCase()];
 
   if (!bucket) {
-    return risk10 >= 8.8 ? "Extreme" : risk10 >= 7.1 ? "High" : risk10 >= 4.8 ? "Medium" : "Low";
+    return risk10 >= 9.2 ? "Extreme" : risk10 >= 7.3 ? "High" : risk10 >= 4.9 ? "Medium" : "Low";
   }
 
   if (bucket === "Low/Medium") {
@@ -361,7 +361,7 @@ function applyTickerRiskBucket(symbol: string, risk10: number): RiskLabel {
     return "High";
   }
   if (bucket === "High/Extreme") {
-    return risk10 >= 8.7 ? "Extreme" : "High";
+    return risk10 >= 9.1 ? "Extreme" : "High";
   }
   return "Extreme";
 }
@@ -565,18 +565,25 @@ export function computeRisk(
       (item.bias === "Bearish" ? 0.85 : 0.22) +
       (profile.speculative ? 0.45 : 0)
   );
+  const momentumScore = num(item.momentum, 50);
+  const bearishMomentumPenalty =
+    momentumScore <= 35 ? 0.95 : momentumScore <= 42 ? 0.55 : momentumScore <= 48 ? 0.2 : 0;
+  const extremeVolatilityGate = normalizedVolatility >= 8.8 && momentumScore <= 42;
 
   const risk10 = clamp10(
     normalizedAtr * 0.23 +
       normalizedVolatility * 0.25 +
       gapFrequency * 1.95 +
       betaProxy * 1.7 +
+      bearishMomentumPenalty +
       (profile.speculative ? 0.5 : 0) +
       (tickerClass === "MegaCapTech" ? -0.38 : tickerClass === "Speculative" ? 0.42 : 0)
   );
 
   const riskScore = Math.round(risk10 * 10);
-  const riskLabel: RiskLabel = applyTickerRiskBucket(item.symbol, risk10);
+  const rawRiskLabel: RiskLabel = applyTickerRiskBucket(item.symbol, risk10);
+  const riskLabel: RiskLabel =
+    rawRiskLabel === "Extreme" && !extremeVolatilityGate ? "High" : rawRiskLabel;
 
   return { riskScore, riskLabel };
 }
@@ -635,12 +642,10 @@ export function computeTradePlan(
   const target1 = r + width * 0.4;
   const target2 = r + width * 0.85;
 
-  let positionSizing = "2% starter";
-  if (riskLabel === "Low" && swing >= 8) positionSizing = "6%-8% full";
-  else if (riskLabel === "Low" && swing >= 7) positionSizing = "5%-6% core";
-  else if (riskLabel === "Medium" && swing >= 7) positionSizing = "3%-5% starter";
-  else if ((riskLabel === "High" || riskLabel === "Extreme") && swing >= 7)
-    positionSizing = "1%-3% tactical";
+  let positionSizing = "SETUP 3%-5%";
+  if (riskLabel === "Extreme") positionSizing = "Extreme 1%-2%";
+  else if (swing >= 8 && (riskLabel === "Low" || riskLabel === "Medium")) positionSizing = "READY 5%-8%";
+  else if (swing >= 6.5) positionSizing = "SETUP 3%-5%";
 
   const callPlan =
     swingStrategy === "Buy Shares + Calls" || swingStrategy === "Buy Calls"

@@ -4,7 +4,7 @@ import { evaluatePuts } from "@/lib/execution/puts";
 import { evaluateShares } from "@/lib/execution/shares";
 
 function deriveRisk(input: ExecutionInput): ExecutionStrategyPlan["risk"] {
-  if (input.volatilityRisk >= 8.6) return "Extreme";
+  if (input.volatilityRisk >= 9.1 && input.momentum <= 4.4) return "Extreme";
   if (input.volatilityRisk >= 7) return "High";
   if (input.volatilityRisk >= 4.8) return "Medium";
   return "Low";

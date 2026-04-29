@@ -244,15 +244,13 @@ function actionStateColor(state: ActionState): string {
 }
 
 function positionSizeForState(state: ActionState, tradeability: Tradeability, confirmation: ConfirmationLabel): string {
-  if (tradeability === "Speculative") return confirmation === "Confirmed" ? "2%-3%" : "1%-2%";
+  if (tradeability === "Speculative") return "Extreme 1%-2%";
   if (state === "READY") {
-    if (confirmation === "Confirmed") return "9%-12%";
-    if (confirmation === "Pending") return "6%-9%";
-    return "3%-5%";
+    return "READY 5%-8%";
   }
-  if (state === "SETUP") return confirmation === "Confirmed" ? "4%-6%" : confirmation === "Pending" ? "3%-5%" : "2%-3%";
+  if (state === "SETUP") return "SETUP 3%-5%";
   if (state === "EXTENDED") return confirmation === "Confirmed" ? "3%-4%" : "2%-3%";
-  if (state === "BREAKDOWN") return confirmation === "Confirmed" ? "4%-6%" : "2%-4%";
+  if (state === "BREAKDOWN") return "Extreme 1%-2%";
   return "2%-4%";
 }
 
@@ -306,7 +304,23 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
   const trendSlope = num(item.lr50Slope, 0);
   const isBreakdown = price > 0 && lr50 < lr100 && breakdownMomentum < 45 && price < lr100;
   const nearSupport = price > 0 && Math.abs(price - support) / Math.max(support, 1) <= 0.02;
-  const baseState: ActionState = isBreakdown ? "BREAKDOWN" : isExtended ? "EXTENDED" : score >= 85 && nearSupport ? "READY" : score >= 70 ? "SETUP" : "BREAKDOWN";
+  const validStructure =
+    price > 0 &&
+    support > 0 &&
+    validResistance > support &&
+    lr50 >= lr100 &&
+    trendSlope >= 0 &&
+    volumeRatio >= 0.95;
+  const weakSetup = !validStructure || confirmationForSetup(volumeRatio, trendSlope) === "Weak" || score < 70;
+  const baseState: ActionState = isBreakdown
+    ? "BREAKDOWN"
+    : isExtended
+    ? "EXTENDED"
+    : score >= 85 && nearSupport && validStructure
+    ? "READY"
+    : score >= 70 && validStructure
+    ? "SETUP"
+    : "SETUP";
   const state: ActionState = (baseState === "READY" && (decision.risk === "High" || decision.risk === "Extreme")) ? "SETUP" : baseState;
   const confirmation = confirmationForSetup(volumeRatio, trendSlope);
   const confirmationCondition =
@@ -341,7 +355,12 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
     stopLoss: formatPrice(stopValue),
     targetLevels: `${target1} / ${target2}`,
     positionSize: positionSizeForState(state, decision.tradeability, confirmation),
-    strategy: state === "BREAKDOWN" && confirmation !== "Confirmed" ? "Starter Shares" : strategyForState(state, decision.signal, strategy, score, decision.risk),
+    strategy:
+      state === "BREAKDOWN"
+        ? "Puts"
+        : weakSetup
+        ? "Starter Shares"
+        : strategyForState(state, decision.signal, strategy, score, decision.risk),
     confirmation,
     entryType,
     entryPrice: formatPrice(defaultEntry),
