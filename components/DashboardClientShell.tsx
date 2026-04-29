@@ -37,6 +37,7 @@ type EngineKey = "swing" | "threeMonth" | "sixMonth" | "oneYear";
 type DecisionSignal = "Bullish" | "Bearish" | "Neutral";
 type Tradeability = "Full Size" | "Starter Size" | "Speculative" | "Avoid";
 type ActionState = "READY" | "SETUP" | "EXTENDED" | "BREAKDOWN";
+type ConfirmationLabel = "Confirmed" | "Pending" | "Weak";
 
 type RiskStyle = "Conservative" | "Balanced" | "Aggressive";
 type HorizonFocus = "Swing" | "3 Month" | "6 Month" | "1 Year";
@@ -242,12 +243,16 @@ function actionStateColor(state: ActionState): string {
   return "#ef4444";
 }
 
-function positionSizeForState(state: ActionState, tradeability: Tradeability): string {
-  if (tradeability === "Speculative") return "1%-2%";
-  if (state === "READY") return "8%-12%";
-  if (state === "SETUP") return "3%-6%";
-  if (state === "EXTENDED") return "2%-4%";
-  if (state === "BREAKDOWN") return "3%-6%";
+function positionSizeForState(state: ActionState, tradeability: Tradeability, confirmation: ConfirmationLabel): string {
+  if (tradeability === "Speculative") return confirmation === "Confirmed" ? "2%-3%" : "1%-2%";
+  if (state === "READY") {
+    if (confirmation === "Confirmed") return "9%-12%";
+    if (confirmation === "Pending") return "6%-9%";
+    return "3%-5%";
+  }
+  if (state === "SETUP") return confirmation === "Confirmed" ? "4%-6%" : confirmation === "Pending" ? "3%-5%" : "2%-3%";
+  if (state === "EXTENDED") return confirmation === "Confirmed" ? "3%-4%" : "2%-3%";
+  if (state === "BREAKDOWN") return confirmation === "Confirmed" ? "4%-6%" : "2%-4%";
   return "2%-4%";
 }
 
@@ -269,6 +274,19 @@ function strategyForState(
   return speculative ? "Speculative Shares" : "Starter Shares";
 }
 
+function confirmationForSetup(volumeRatio: number, trendSlope: number): ConfirmationLabel {
+  if (volumeRatio >= 1.2 && trendSlope > 0) return "Confirmed";
+  if (volumeRatio >= 1 && trendSlope >= 0) return "Pending";
+  return "Weak";
+}
+
+function opportunityScoreForPlan(score: number, state: ActionState, confirmation: ConfirmationLabel, risk: RiskLabel): number {
+  const stateFactor = state === "READY" ? 1 : state === "SETUP" ? 0.84 : state === "EXTENDED" ? 0.62 : 0.58;
+  const confirmationFactor = confirmation === "Confirmed" ? 1.08 : confirmation === "Pending" ? 0.94 : 0.76;
+  const riskFactor = risk === "Low" ? 1.04 : risk === "Medium" ? 0.96 : risk === "High" ? 0.72 : 0.54;
+  return Number(Math.max(0, Math.min(100, score * stateFactor * confirmationFactor * riskFactor)).toFixed(2));
+}
+
 function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey) {
   const decision = buildDecision(metrics, engine);
   const score = toDisplayScore(engineScore(metrics, engine));
@@ -283,10 +301,20 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
   const lr50 = num(item.lr50, support + width * 0.5);
   const lr100 = num(item.lr100, support - width * 0.1);
   const isExtended = price > 0 && price > validResistance * 1.03;
-  const isBreakdown = price > 0 && price < lr100;
+  const volumeRatio = num(item.volumeRatio, 1);
+  const breakdownMomentum = num(item.momentumToday, 50);
+  const trendSlope = num(item.lr50Slope, 0);
+  const isBreakdown = price > 0 && lr50 < lr100 && breakdownMomentum < 45 && price < lr100;
   const nearSupport = price > 0 && Math.abs(price - support) / Math.max(support, 1) <= 0.02;
-  const state: ActionState = isBreakdown ? "BREAKDOWN" : isExtended ? "EXTENDED" : score >= 85 && nearSupport ? "READY" : score >= 70 ? "SETUP" : "BREAKDOWN";
-  const confirmationCondition = state === "SETUP" ? `Reclaim ${formatPrice(safeResistance)} with volume > 1.2x.` : "No extra confirmation required.";
+  const baseState: ActionState = isBreakdown ? "BREAKDOWN" : isExtended ? "EXTENDED" : score >= 85 && nearSupport ? "READY" : score >= 70 ? "SETUP" : "BREAKDOWN";
+  const state: ActionState = (baseState === "READY" && (decision.risk === "High" || decision.risk === "Extreme")) ? "SETUP" : baseState;
+  const confirmation = confirmationForSetup(volumeRatio, trendSlope);
+  const confirmationCondition =
+    state === "SETUP"
+      ? `Reclaim ${formatPrice(safeResistance)} with volume > 1.2x.`
+      : state === "BREAKDOWN"
+      ? `Break ${formatPrice(support)} with volume > 1.1x and momentum < 45.`
+      : "No extra confirmation required.";
 
   const entryTrigger =
     state === "EXTENDED"
@@ -298,6 +326,7 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
       : `Enter on resistance reclaim above ${formatPrice(safeResistance)}.`;
 
   const stopValue = Math.min(lr100, support - width * 0.12);
+  const entryType = state === "EXTENDED" ? "Pullback" : state === "SETUP" ? "Breakout Reclaim" : state === "BREAKDOWN" ? "Breakdown" : "Immediate";
   const defaultEntry = state === "EXTENDED" ? lr50 : state === "SETUP" ? safeResistance : state === "BREAKDOWN" ? support * 0.995 : price;
   const riskPerShare = Math.max(defaultEntry - stopValue, Math.max(defaultEntry * 0.01, 0.1));
   const target1 = formatPrice(defaultEntry + riskPerShare);
@@ -311,8 +340,12 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
     entry: formatPrice(defaultEntry),
     stopLoss: formatPrice(stopValue),
     targetLevels: `${target1} / ${target2}`,
-    positionSize: positionSizeForState(state, decision.tradeability),
-    strategy: strategyForState(state, decision.signal, strategy, score, decision.risk),
+    positionSize: positionSizeForState(state, decision.tradeability, confirmation),
+    strategy: state === "BREAKDOWN" && confirmation !== "Confirmed" ? "Starter Shares" : strategyForState(state, decision.signal, strategy, score, decision.risk),
+    confirmation,
+    entryType,
+    entryPrice: formatPrice(defaultEntry),
+    opportunityScore: opportunityScoreForPlan(score, state, confirmation, decision.risk),
     decision,
   };
 }
@@ -618,17 +651,25 @@ export default function DashboardClientShell() {
   }, [chartRange, chartSeries, selectedItem, selectedMetrics]);
 
   const sortedRows = useMemo(() => {
-    return [...rows].sort((a, b) => {
-      const scoreDiff = engineScore(b.metrics, watchlistHorizon) - engineScore(a.metrics, watchlistHorizon);
+    const scored = rows.map((row) => {
+      const actionPlan = buildActionablePlan(row.item, row.metrics, watchlistHorizon);
+      return { ...row, opportunityScore: actionPlan.opportunityScore };
+    });
+
+    const ranked = scored.sort((a, b) => {
+      const scoreDiff = b.opportunityScore - a.opportunityScore;
       if (scoreDiff !== 0) return scoreDiff;
       return b.metrics.confidencePercent - a.metrics.confidencePercent;
     });
+
+    return ranked.map(({ opportunityScore, ...row }, idx) => ({ ...row, opportunityRank: idx + 1, opportunityScore }));
   }, [rows, watchlistHorizon]);
 
   const spotlightRows = useMemo(
     () =>
       sortedRows
         .filter((row) => num(row.item.price) > 0)
+        .filter((row) => (row.opportunityRank ?? 99) <= 3)
         .slice(0, 3),
     [sortedRows]
   );
