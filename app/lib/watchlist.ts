@@ -12,6 +12,7 @@ export type WatchlistItem = {
   resistance: number;
   rsi: number;
   volumeRatio: number;
+  momentum?: number;
   technicalScore: number;
   whaleScore: number;
   macroScore: number;
