@@ -27,6 +27,7 @@ export type WatchlistRuntimeIntelligence = Partial<
     | "resistance"
     | "rsi"
     | "volumeRatio"
+    | "momentum"
     | "technicalScore"
     | "whaleScore"
     | "macroScore"
@@ -62,6 +63,7 @@ export function mapWatchlistRowToItem(row: WatchlistDbRow, runtime?: WatchlistRu
     resistance: num(runtime?.resistance, 0),
     rsi: num(runtime?.rsi, 50),
     volumeRatio: num(runtime?.volumeRatio, 1),
+    momentum: toOptionalNumber(runtime?.momentum),
     technicalScore: num(runtime?.technicalScore, 70),
     whaleScore: num(runtime?.whaleScore, 60),
     macroScore: num(runtime?.macroScore, 60),

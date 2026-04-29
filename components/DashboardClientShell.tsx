@@ -302,7 +302,7 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
   const lr100 = num(item.lr100, support - width * 0.1);
   const isExtended = price > 0 && price > validResistance * 1.03;
   const volumeRatio = num(item.volumeRatio, 1);
-  const breakdownMomentum = num(item.momentumToday, 50);
+  const breakdownMomentum = num(item.momentum, 50);
   const trendSlope = num(item.lr50Slope, 0);
   const isBreakdown = price > 0 && lr50 < lr100 && breakdownMomentum < 45 && price < lr100;
   const nearSupport = price > 0 && Math.abs(price - support) / Math.max(support, 1) <= 0.02;
