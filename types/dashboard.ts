@@ -41,6 +41,7 @@ export type Strategy =
   | "Hedge Only"
   | "Buy Shares + Calls"
   | "Buy Calls"
+  | "Buy LEAPS"
   | "Watch"
   | "Avoid"
   | "Buy Puts";
