@@ -36,7 +36,7 @@ type RowData = {
 type EngineKey = "swing" | "threeMonth" | "sixMonth" | "oneYear";
 type DecisionSignal = "Bullish" | "Bearish" | "Neutral";
 type Tradeability = "Full Size" | "Starter Size" | "Speculative" | "Avoid";
-type ActionState = "Ready" | "Setup" | "Extended" | "Breakdown";
+type ActionState = "READY" | "SETUP" | "EXTENDED" | "BREAKDOWN";
 
 type RiskStyle = "Conservative" | "Balanced" | "Aggressive";
 type HorizonFocus = "Swing" | "3 Month" | "6 Month" | "1 Year";
@@ -236,25 +236,37 @@ function buildDecision(metrics: RowMetrics, engine: EngineKey): { signal: Decisi
 }
 
 function actionStateColor(state: ActionState): string {
-  if (state === "Ready") return "#22c55e";
-  if (state === "Setup") return "#f59e0b";
-  if (state === "Extended") return "#a855f7";
+  if (state === "READY") return "#22c55e";
+  if (state === "SETUP") return "#f59e0b";
+  if (state === "EXTENDED") return "#a855f7";
   return "#ef4444";
 }
 
 function positionSizeForState(state: ActionState, tradeability: Tradeability): string {
-  if (state === "Extended") return "0.5%-1% add-on only";
-  if (state === "Breakdown") return "0%-1% hedge only";
-  if (tradeability === "Full Size") return "6%-8% full";
-  if (tradeability === "Starter Size") return "3%-5% starter";
-  if (tradeability === "Speculative") return "1%-3% tactical";
-  return "0%-1% defensive";
+  if (tradeability === "Speculative") return "1%-2%";
+  if (state === "READY") return "8%-12%";
+  if (state === "SETUP") return "3%-6%";
+  if (state === "EXTENDED") return "2%-4%";
+  if (state === "BREAKDOWN") return "3%-6%";
+  return "2%-4%";
 }
 
-function strategyForState(state: ActionState, signal: DecisionSignal, strategy: Strategy): "shares" | "calls" | "puts" {
-  if (state === "Breakdown" || signal === "Bearish" || strategy === "Buy Puts") return "puts";
-  if (state === "Ready" && (strategy === "Buy Calls" || strategy === "Buy Shares + Calls")) return "calls";
-  return "shares";
+function strategyForState(
+  state: ActionState,
+  signal: DecisionSignal,
+  strategy: Strategy,
+  confidence: number,
+  risk: RiskLabel
+): "Starter Shares" | "Calls" | "Puts" | "Speculative Shares" | "Speculative Calls" | "LEAPS Calls" {
+  const speculative = risk === "Extreme";
+  const allowCalls = (state === "READY" || state === "SETUP") && confidence >= 70 && (!speculative || state === "READY");
+  const allowPuts = state === "BREAKDOWN" || signal === "Bearish" || strategy === "Buy Puts";
+  if (allowPuts) return speculative ? "Speculative Shares" : "Puts";
+  if (allowCalls) {
+    if (confidence >= 75 && strategy === "Buy LEAPS") return "LEAPS Calls";
+    return speculative ? "Speculative Calls" : "Calls";
+  }
+  return speculative ? "Speculative Shares" : "Starter Shares";
 }
 
 function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey) {
@@ -268,37 +280,39 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
   const safeResistance = validResistance ?? price * 1.02;
   const width = Math.max(validResistance - support, Math.max(price * 0.03, 0.5));
 
-  const isExtended = price > 0 && price > validResistance * 1.01;
-  const isBreakdown = price > 0 && price < support * 0.995;
-  const state: ActionState = isBreakdown ? "Breakdown" : isExtended ? "Extended" : score >= 78 ? "Ready" : score >= 70 ? "Setup" : "Breakdown";
-  const confirmationCondition =
-    state === "Setup"
-      ? `Require confirmation: reclaim and hold above ${formatPrice(safeResistance)} with volume > 1.2x.`
-      : "No extra confirmation required.";
+  const lr50 = num(item.lr50, support + width * 0.5);
+  const lr100 = num(item.lr100, support - width * 0.1);
+  const isExtended = price > 0 && price > validResistance * 1.03;
+  const isBreakdown = price > 0 && price < lr100;
+  const nearSupport = price > 0 && Math.abs(price - support) / Math.max(support, 1) <= 0.02;
+  const state: ActionState = isBreakdown ? "BREAKDOWN" : isExtended ? "EXTENDED" : score >= 85 && nearSupport ? "READY" : score >= 70 ? "SETUP" : "BREAKDOWN";
+  const confirmationCondition = state === "SETUP" ? `Reclaim ${formatPrice(safeResistance)} with volume > 1.2x.` : "No extra confirmation required.";
 
   const entryTrigger =
-    state === "Extended"
-      ? `Do not chase. Wait for pullback into ${formatPrice(Math.max(support, safeResistance - width * 0.25))} - ${formatPrice(safeResistance)} before entering.`
-      : state === "Breakdown"
-      ? `Breakdown active below ${formatPrice(support)}. Avoid longs; only act on weak bounces into ${formatPrice(support)}.`
-      : state === "Ready"
-      ? `Enter on hold above ${formatPrice(safeResistance)} or pullback support hold near ${formatPrice(support + width * 0.2)}.`
-      : `Staging only: probe near ${formatPrice(support + width * 0.2)} and add only after breakout above ${formatPrice(safeResistance)}.`;
+    state === "EXTENDED"
+      ? `Wait for pullback to LR50 near ${formatPrice(lr50)}.`
+      : state === "BREAKDOWN"
+      ? `Enter puts on breakdown below ${formatPrice(support)}.`
+      : state === "READY"
+      ? `Enter now around ${formatPrice(price)} or minor pullback to ${formatPrice(Math.max(support, price - width * 0.15))}.`
+      : `Enter on resistance reclaim above ${formatPrice(safeResistance)}.`;
 
-  const stopLoss =
-    state === "Breakdown" ? formatPrice(support + width * 0.08) : formatPrice(Math.max(support - width * 0.18, price * 0.82));
-  const target1 = formatPrice(validResistance + width * 0.4);
-  const target2 = formatPrice(validResistance + width * 0.85);
+  const stopValue = Math.min(lr100, support - width * 0.12);
+  const defaultEntry = state === "EXTENDED" ? lr50 : state === "SETUP" ? safeResistance : state === "BREAKDOWN" ? support * 0.995 : price;
+  const riskPerShare = Math.max(defaultEntry - stopValue, Math.max(defaultEntry * 0.01, 0.1));
+  const target1 = formatPrice(defaultEntry + riskPerShare);
+  const target2 = formatPrice(defaultEntry + riskPerShare * 2);
 
   return {
     state,
     color: actionStateColor(state),
     entryTrigger,
     confirmationCondition,
-    stopLoss,
+    entry: formatPrice(defaultEntry),
+    stopLoss: formatPrice(stopValue),
     targetLevels: `${target1} / ${target2}`,
     positionSize: positionSizeForState(state, decision.tradeability),
-    strategy: strategyForState(state, decision.signal, strategy),
+    strategy: strategyForState(state, decision.signal, strategy, score, decision.risk),
     decision,
   };
 }
@@ -1713,10 +1727,10 @@ export default function DashboardClientShell() {
                   {card.action.state}
                 </div>
                 <div style={{ marginTop: 8, fontSize: 13, color: "#cbd5e1" }}>
-                  {card.action.entryTrigger}
+                  <b>Entry:</b> {card.action.entry}
                 </div>
                 <div style={{ marginTop: 6, fontSize: 12, color: "#94a3b8" }}>
-                  {card.action.confirmationCondition}
+                  <b>Stop:</b> {card.action.stopLoss} • <b>Target:</b> {card.action.targetLevels}
                 </div>
               </div>
             ))}
@@ -1864,7 +1878,8 @@ export default function DashboardClientShell() {
               heading="h4"
               content="Entry zone helps avoid chasing price. Stop loss defines your planned downside. Targets help you scale profits, and position size helps control total portfolio risk."
             />
-            <p><b>State:</b> <span style={{ color: selectedActionPlan?.color ?? "#f59e0b" }}>{selectedActionPlan?.state ?? "Setup"}</span></p>
+            <p><b>State:</b> <span style={{ color: selectedActionPlan?.color ?? "#f59e0b" }}>{selectedActionPlan?.state ?? "SETUP"}</span></p>
+            <p><b>Entry:</b> {selectedActionPlan?.entry ?? selectedMetrics.entryZone}</p>
             <p><b>Entry Trigger:</b> {selectedActionPlan?.entryTrigger ?? selectedMetrics.entryZone}</p>
             <p><b>Confirmation:</b> {selectedActionPlan?.confirmationCondition ?? "No extra confirmation required."}</p>
             <p><b>Stop Loss:</b> {selectedActionPlan?.stopLoss ?? selectedMetrics.stopLoss}</p>
@@ -2063,7 +2078,7 @@ export default function DashboardClientShell() {
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 700 }}>{actionPlan.stopLoss}</td>
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 700 }}>{actionPlan.targetLevels}</td>
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 700 }}>{actionPlan.positionSize}</td>
-                <td style={{ padding: 9, textAlign: "center", fontWeight: 700, textTransform: "uppercase" }}>{actionPlan.strategy}</td>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 700 }}>{actionPlan.strategy}</td>
 
                 <td style={{ padding: 9, textAlign: "center" }}>
                   <button
