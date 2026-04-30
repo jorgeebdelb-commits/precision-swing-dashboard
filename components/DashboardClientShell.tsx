@@ -36,7 +36,7 @@ type RowData = {
 type EngineKey = "swing" | "threeMonth" | "sixMonth" | "oneYear";
 type DecisionSignal = "Bullish" | "Bearish" | "Neutral";
 type Tradeability = "Full Size" | "Starter Size" | "Speculative" | "Avoid";
-type ActionState = "READY" | "SETUP" | "EXTENDED" | "BREAKDOWN";
+type ActionState = "READY" | "SETUP" | "EXTENDED" | "BREAKDOWN" | "NO_TRADE";
 type ConfirmationLabel = "Confirmed" | "Pending" | "Weak";
 
 type RiskStyle = "Conservative" | "Balanced" | "Aggressive";
@@ -240,10 +240,12 @@ function actionStateColor(state: ActionState): string {
   if (state === "READY") return "#22c55e";
   if (state === "SETUP") return "#f59e0b";
   if (state === "EXTENDED") return "#a855f7";
+  if (state === "NO_TRADE") return "#6b7280";
   return "#ef4444";
 }
 
 function positionSizeForState(state: ActionState, tradeability: Tradeability, confirmation: ConfirmationLabel): string {
+  if (state === "NO_TRADE") return "No Position";
   if (tradeability === "Speculative") return "Extreme 1%-2%";
   if (state === "READY") {
     return "READY 5%-8%";
@@ -279,7 +281,7 @@ function confirmationForSetup(volumeRatio: number, trendSlope: number): Confirma
 }
 
 function opportunityScoreForPlan(score: number, state: ActionState, confirmation: ConfirmationLabel, risk: RiskLabel): number {
-  const stateFactor = state === "READY" ? 1 : state === "SETUP" ? 0.84 : state === "EXTENDED" ? 0.62 : 0.58;
+  const stateFactor = state === "READY" ? 1 : state === "SETUP" ? 0.84 : state === "EXTENDED" ? 0.62 : state === "NO_TRADE" ? 0.1 : 0.58;
   const confirmationFactor = confirmation === "Confirmed" ? 1.08 : confirmation === "Pending" ? 0.94 : 0.76;
   const riskFactor = risk === "Low" ? 1.04 : risk === "Medium" ? 0.96 : risk === "High" ? 0.72 : 0.54;
   return Number(Math.max(0, Math.min(100, score * stateFactor * confirmationFactor * riskFactor)).toFixed(2));
@@ -312,6 +314,7 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
     trendSlope >= 0 &&
     volumeRatio >= 0.95;
   const weakSetup = !validStructure || confirmationForSetup(volumeRatio, trendSlope) === "Weak" || score < 70;
+  const extremeNoTrade = decision.risk === "Extreme" && score < 70;
   const baseState: ActionState = isBreakdown
     ? "BREAKDOWN"
     : isExtended
@@ -321,17 +324,25 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
     : score >= 70 && validStructure
     ? "SETUP"
     : "SETUP";
-  const state: ActionState = (baseState === "READY" && (decision.risk === "High" || decision.risk === "Extreme")) ? "SETUP" : baseState;
+  const state: ActionState = extremeNoTrade
+    ? "NO_TRADE"
+    : (baseState === "READY" && (decision.risk === "High" || decision.risk === "Extreme"))
+    ? "SETUP"
+    : baseState;
   const confirmation = confirmationForSetup(volumeRatio, trendSlope);
   const confirmationCondition =
-    state === "SETUP"
+    state === "NO_TRADE"
+      ? "Risk is Extreme with confidence below threshold; setup is non-actionable."
+      : state === "SETUP"
       ? `Reclaim ${formatPrice(safeResistance)} with volume > 1.2x.`
       : state === "BREAKDOWN"
       ? `Break ${formatPrice(support)} with volume > 1.1x and momentum < 45.`
       : "No extra confirmation required.";
 
   const entryTrigger =
-    state === "EXTENDED"
+    state === "NO_TRADE"
+      ? "Stand aside until risk normalizes or confidence improves."
+      : state === "EXTENDED"
       ? `Wait for pullback to LR50 near ${formatPrice(lr50)}.`
       : state === "BREAKDOWN"
       ? `Enter puts on breakdown below ${formatPrice(support)}.`
@@ -340,7 +351,14 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
       : `Enter on resistance reclaim above ${formatPrice(safeResistance)}.`;
 
   const stopValue = Math.min(lr100, support - width * 0.12);
-  const entryType = state === "EXTENDED" ? "Pullback" : state === "SETUP" ? "Breakout Reclaim" : state === "BREAKDOWN" ? "Breakdown" : "Immediate";
+  const entryType =
+    state === "BREAKDOWN"
+      ? "Breakdown"
+      : state === "SETUP" || state === "READY"
+      ? "Breakout"
+      : state === "EXTENDED"
+      ? "Pullback"
+      : "Pullback";
   const defaultEntry = state === "EXTENDED" ? lr50 : state === "SETUP" ? safeResistance : state === "BREAKDOWN" ? support * 0.995 : price;
   const riskPerShare = Math.max(defaultEntry - stopValue, Math.max(defaultEntry * 0.01, 0.1));
   const target1 = formatPrice(defaultEntry + riskPerShare);
@@ -356,7 +374,9 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
     targetLevels: `${target1} / ${target2}`,
     positionSize: positionSizeForState(state, decision.tradeability, confirmation),
     strategy:
-      state === "BREAKDOWN"
+      state === "NO_TRADE"
+        ? "Starter Shares"
+        : state === "BREAKDOWN"
         ? "Puts"
         : weakSetup
         ? "Starter Shares"
@@ -364,7 +384,7 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
     confirmation,
     entryType,
     entryPrice: formatPrice(defaultEntry),
-    opportunityScore: opportunityScoreForPlan(score, state, confirmation, decision.risk),
+    opportunityScore: state === "NO_TRADE" ? 0 : opportunityScoreForPlan(score, state, confirmation, decision.risk),
     decision,
   };
 }
@@ -730,11 +750,26 @@ export default function DashboardClientShell() {
       return 0.82;
     };
 
-    const vehicleFromStrategy = (strategy: string) => {
-      if (strategy.includes("Puts")) return "Puts";
-      if (strategy.includes("Calls")) return "Calls";
-      if (strategy.includes("Avoid")) return "Cash";
-      return "Shares";
+    const vehicleFromStrategy = (strategy: Strategy) => {
+      switch (strategy) {
+        case "Buy Puts":
+          return "Puts";
+        case "Buy Shares + Calls":
+        case "Buy Calls":
+        case "Buy LEAPS":
+        case "Starter Shares + Calls on Breakout":
+          return "Calls";
+        case "Avoid":
+        case "Watch":
+        case "Hedge Only":
+          return "Cash";
+        case "Spec Buy":
+        case "Buy Shares":
+        case "Starter Shares":
+          return "Shares";
+        default:
+          return "Cash";
+      }
     };
 
     const ranked = sortedRows

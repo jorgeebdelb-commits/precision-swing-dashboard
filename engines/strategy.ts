@@ -568,7 +568,8 @@ export function computeRisk(
   const momentumScore = num(item.momentum, 50);
   const bearishMomentumPenalty =
     momentumScore <= 35 ? 0.95 : momentumScore <= 42 ? 0.55 : momentumScore <= 48 ? 0.2 : 0;
-  const extremeVolatilityGate = normalizedVolatility >= 8.8 && momentumScore <= 42;
+  const weakTrend = !technicals.trendAligned || technicals.lr50Slope <= 0 || technicals.lr50 < technicals.lr100;
+  const extremeVolatilityGate = normalizedVolatility >= 8.8 && weakTrend && momentumScore <= 42;
 
   const risk10 = clamp10(
     normalizedAtr * 0.23 +
@@ -889,7 +890,7 @@ function buildExecutionNotes(strategy: Strategy): { callPlan: string; putPlan: s
 
 export function computeMetrics(item: Item): RowMetrics {
   const { pillars, technicals, profile } = computePillars(item);
-  const { riskScore, riskLabel } = computeRisk(item, technicals);
+  const { riskScore, riskLabel: baseRiskLabel } = computeRisk(item, technicals);
 
   const momentum = clamp10(
     (pillars.technical * 0.5 +
@@ -919,7 +920,7 @@ export function computeMetrics(item: Item): RowMetrics {
     oneYearScore: oneYearExpanded,
     pillars,
     item,
-    riskLabel,
+    riskLabel: baseRiskLabel,
     technicals,
     momentum,
   });
@@ -962,10 +963,12 @@ export function computeMetrics(item: Item): RowMetrics {
       sixMonth: sixMonthExpanded,
       oneYear: oneYearExpanded,
     },
-    riskLabel,
+    riskLabel: baseRiskLabel,
     profile,
   });
   const confidence = confidenceToScore(confidenceLabel);
+  const riskLabel: RiskLabel =
+    baseRiskLabel === "Extreme" && confidencePercent >= 70 ? "High" : baseRiskLabel;
 
   const whaleV2 = Math.round(
     clamp(
