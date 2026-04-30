@@ -314,6 +314,7 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
     trendSlope >= 0 &&
     volumeRatio >= 0.95;
   const weakSetup = !validStructure || confirmationForSetup(volumeRatio, trendSlope) === "Weak" || score < 70;
+  const setupBlockedByHighRiskConfidence = decision.risk === "High" && metrics.confidencePercent < 72;
   const extremeNoTrade = decision.risk === "Extreme" && score < 70;
   const baseState: ActionState = isBreakdown
     ? "BREAKDOWN"
@@ -326,13 +327,17 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
     : "SETUP";
   const state: ActionState = extremeNoTrade
     ? "NO_TRADE"
+    : (baseState === "SETUP" && setupBlockedByHighRiskConfidence)
+    ? "NO_TRADE"
     : (baseState === "READY" && (decision.risk === "High" || decision.risk === "Extreme"))
     ? "SETUP"
     : baseState;
   const confirmation = confirmationForSetup(volumeRatio, trendSlope);
   const confirmationCondition =
     state === "NO_TRADE"
-      ? "Risk is Extreme with confidence below threshold; setup is non-actionable."
+      ? setupBlockedByHighRiskConfidence
+        ? "Risk is High and confidence is below 72; setup is non-actionable."
+        : "Risk is Extreme with confidence below threshold; setup is non-actionable."
       : state === "SETUP"
       ? `Reclaim ${formatPrice(safeResistance)} with volume > 1.2x.`
       : state === "BREAKDOWN"
@@ -355,10 +360,10 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
     state === "BREAKDOWN"
       ? "Breakdown"
       : state === "SETUP" || state === "READY"
-      ? "Breakout"
+      ? "Breakout (resistance)"
       : state === "EXTENDED"
-      ? "Pullback"
-      : "Pullback";
+      ? "Pullback (support/LR50)"
+      : "Pullback (support/LR50)";
   const defaultEntry = state === "EXTENDED" ? lr50 : state === "SETUP" ? safeResistance : state === "BREAKDOWN" ? support * 0.995 : price;
   const riskPerShare = Math.max(defaultEntry - stopValue, Math.max(defaultEntry * 0.01, 0.1));
   const target1 = formatPrice(defaultEntry + riskPerShare);
@@ -692,7 +697,10 @@ export default function DashboardClientShell() {
   const sortedRows = useMemo(() => {
     const scored = rows.map((row) => {
       const actionPlan = buildActionablePlan(row.item, row.metrics, watchlistHorizon);
-      return { ...row, opportunityScore: actionPlan.opportunityScore };
+      const blendedOpportunityScore = Number(
+        Math.max(0, Math.min(100, actionPlan.opportunityScore * 0.65 + row.metrics.opportunityScore * 0.35)).toFixed(2)
+      );
+      return { ...row, opportunityScore: blendedOpportunityScore };
     });
 
     const ranked = scored.sort((a, b) => {
@@ -754,16 +762,18 @@ export default function DashboardClientShell() {
       switch (strategy) {
         case "Buy Puts":
           return "Puts";
-        case "Buy Shares + Calls":
         case "Buy Calls":
         case "Buy LEAPS":
-        case "Starter Shares + Calls on Breakout":
           return "Calls";
+        case "Buy Shares + Calls":
+        case "Starter Shares + Calls on Breakout":
+          return "Shares + Calls";
         case "Avoid":
         case "Watch":
         case "Hedge Only":
           return "Cash";
         case "Spec Buy":
+          return "Speculative Shares";
         case "Buy Shares":
         case "Starter Shares":
           return "Shares";
