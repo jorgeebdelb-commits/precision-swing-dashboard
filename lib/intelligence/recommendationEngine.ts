@@ -10,9 +10,10 @@ export type StrategyRecommendation =
   | "Starter Shares"
   | "Watch"
   | "Avoid"
-  | "Buy Puts";
+  | "Buy Puts"
+  | "None";
 
-export type RatingLabel = "Strong Buy" | "Buy" | "Watch" | "Avoid";
+export type RatingLabel = "Strong Buy" | "Buy" | "Watch" | "Avoid" | "Insufficient Data";
 
 export type RecommendationEngineInput = {
   swingScore: number;
@@ -33,6 +34,11 @@ export type RecommendationEngineInput = {
   multiTimeframeAgreement: number;
   sectorStrength: number;
   newsClarity: number;
+  criticalInputs?: {
+    hasPrice: boolean;
+    hasVwapWhenRequired: boolean;
+    hasFundamentalsForLongHorizon: boolean;
+  };
 };
 
 export type RecommendationEngineOutput = {
@@ -44,7 +50,13 @@ export type RecommendationEngineOutput = {
   warningReason?: string;
 };
 
-const clamp10 = (value: number): number => Math.max(1, Math.min(10, value));
+const clamp100 = (value: number): number => Math.max(0, Math.min(100, value));
+
+const normalizeScore100 = (value: number): number => {
+  if (!Number.isFinite(value)) return 0;
+  const normalized = value <= 10 ? value * 10 : value;
+  return clamp100(normalized);
+};
 
 const riskToNumeric: Record<RiskLevel, number> = {
   Low: 1,
@@ -54,9 +66,9 @@ const riskToNumeric: Record<RiskLevel, number> = {
 };
 
 function scoreToRating(score: number): RatingLabel {
-  if (score >= 8.5) return "Strong Buy";
-  if (score >= 7.4) return "Buy";
-  if (score >= 5.5) return "Watch";
+  if (score >= 85) return "Strong Buy";
+  if (score >= 74) return "Buy";
+  if (score >= 55) return "Watch";
   return "Avoid";
 }
 
@@ -82,35 +94,53 @@ function baseConfidence(input: RecommendationEngineInput): ConfidenceLevel {
     input.technicalScore * 0.12 +
     input.fundamentalScore * 0.12;
 
-  const volatilityDrag = input.volatility >= 8 ? 0.55 : input.volatility >= 6.8 ? 0.3 : 0;
+  const volatilityDrag = input.volatility >= 80 ? 5.5 : input.volatility >= 68 ? 3 : 0;
   const adjustedConviction = convictionScore * 0.56 + confidenceComposite * 0.44 - volatilityDrag;
 
-  if (adjustedConviction >= 8.1 && spread <= 2.2 && riskToNumeric[input.riskLevel] <= 3) {
+  if (adjustedConviction >= 81 && spread <= 22 && riskToNumeric[input.riskLevel] <= 3) {
     return "High";
   }
-  if (adjustedConviction >= 6.0 && spread <= 4.4) {
-    return adjustedConviction < 6.5 && input.multiTimeframeAgreement < 5.4 ? "Low" : "Medium";
+  if (adjustedConviction >= 60 && spread <= 44) {
+    return adjustedConviction < 65 && input.multiTimeframeAgreement < 54 ? "Low" : "Medium";
   }
   return "Low";
 }
 
 export function evaluateRecommendation(input: RecommendationEngineInput): RecommendationEngineOutput {
-  const swing = clamp10(input.swingScore);
-  const m3 = clamp10(input.threeMonthScore);
-  const m6 = clamp10(input.sixMonthScore);
-  const y1 = clamp10(input.oneYearScore);
-  const technical = clamp10(input.technicalScore);
-  const fundamental = clamp10(input.fundamentalScore);
-  const momentum = clamp10(input.momentum);
-  const volatility = clamp10(input.volatility);
-  const whalesIntel = clamp10(input.whalesIntel);
+  const swing = normalizeScore100(input.swingScore);
+  const m3 = normalizeScore100(input.threeMonthScore);
+  const m6 = normalizeScore100(input.sixMonthScore);
+  const y1 = normalizeScore100(input.oneYearScore);
+  const technical = normalizeScore100(input.technicalScore);
+  const fundamental = normalizeScore100(input.fundamentalScore);
+  const momentum = normalizeScore100(input.momentum);
+  const volatility = normalizeScore100(input.volatility);
+  const whalesIntel = normalizeScore100(input.whalesIntel);
 
   const averageScore = swing * 0.34 + m3 * 0.24 + m6 * 0.22 + y1 * 0.2;
-  const longTermBullish = m3 >= 7.1 && m6 >= 7.2 && y1 >= 7.3 && fundamental >= 6.5;
-  const allWeak = swing < 5.5 && m3 < 5.5 && m6 < 5.5 && y1 < 5.5;
-  const technicalBreakdown = technical <= 4.8 || (swing <= 5.2 && momentum <= 4.8);
-  const momentumBreakout = momentum >= 8.2 && technical >= 7.6 && whalesIntel >= 7.2;
+  const longTermBullish = m3 >= 71 && m6 >= 72 && y1 >= 73 && fundamental >= 65;
+  const allWeak = swing < 55 && m3 < 55 && m6 < 55 && y1 < 55;
+  const technicalBreakdown = technical <= 48 || (swing <= 52 && momentum <= 48);
+  const momentumBreakout = momentum >= 82 && technical >= 76 && whalesIntel >= 72;
   const riskNumeric = riskToNumeric[input.riskLevel];
+
+
+  const hasCriticalData =
+    input.criticalInputs == null ||
+    (input.criticalInputs.hasPrice &&
+      input.criticalInputs.hasVwapWhenRequired &&
+      input.criticalInputs.hasFundamentalsForLongHorizon);
+
+  if (!hasCriticalData) {
+    return {
+      rating: "Insufficient Data",
+      confidence: "Low",
+      risk: input.riskLevel,
+      strategy: "None",
+      reason: "Insufficient critical inputs (price, VWAP, or long-horizon fundamentals).",
+      warningReason: "Insufficient Data",
+    };
+  }
 
   let rating = scoreToRating(averageScore);
   let confidence = baseConfidence(input);
@@ -128,35 +158,35 @@ export function evaluateRecommendation(input: RecommendationEngineInput): Recomm
     strategy = "Buy Puts";
     confidence = confidence === "High" ? "Medium" : confidence;
     reason = "Technical breakdown with bearish sentiment increases downside risk.";
-  } else if (swing >= 8.8 && momentum >= 7.8 && riskNumeric <= 2) {
+  } else if (swing >= 88 && momentum >= 78 && riskNumeric <= 2) {
     rating = "Strong Buy";
     strategy = momentumBreakout ? "Buy Shares + Calls" : "Buy Shares";
     confidence = "High";
     reason = momentumBreakout
       ? "Strong momentum breakout with controlled risk profile."
       : "Swing strength is exceptional with supportive momentum and manageable risk.";
-  } else if (longTermBullish && swing < 6.5) {
-    rating = scoreToRating(Math.max(averageScore, 7.5));
+  } else if (longTermBullish && swing < 65) {
+    rating = scoreToRating(Math.max(averageScore, 75));
     strategy = "Buy Shares";
     confidence = confidence === "Low" ? "Medium" : confidence;
     reason = "Good long-term fundamentals, weak short-term setup.";
-  } else if (swing >= 7.5 && momentumBreakout && riskNumeric <= 2) {
-    rating = scoreToRating(Math.max(averageScore, 8.2));
+  } else if (swing >= 75 && momentumBreakout && riskNumeric <= 2) {
+    rating = scoreToRating(Math.max(averageScore, 82));
     strategy = "Buy Shares + Calls";
     confidence = confidence === "Low" ? "Medium" : confidence;
     reason = "Bullish swing score plus breakout momentum supports shares and calls.";
-  } else if (averageScore >= 8.1 && riskNumeric <= 3 && volatility <= 7.2) {
+  } else if (averageScore >= 81 && riskNumeric <= 3 && volatility <= 72) {
     rating = scoreToRating(averageScore);
     strategy = "Buy Calls";
     confidence = confidence === "Low" ? "Medium" : confidence;
     reason = "High composite score with contained volatility supports call exposure.";
-  } else if (averageScore >= 6.9 && riskNumeric <= 3) {
+  } else if (averageScore >= 69 && riskNumeric <= 3) {
     rating = scoreToRating(averageScore);
-    strategy = riskNumeric <= 2 && input.multiTimeframeAgreement >= 6.2 ? "Buy Shares" : "Starter Shares";
+    strategy = riskNumeric <= 2 && input.multiTimeframeAgreement >= 62 ? "Buy Shares" : "Starter Shares";
     reason = strategy === "Buy Shares" ? "Broad score alignment supports share accumulation." : "Bullish score but risk is elevated; size positions carefully.";
-  } else if (averageScore >= 5.5) {
+  } else if (averageScore >= 55) {
     rating = "Watch";
-    strategy = riskNumeric >= 3 && averageScore < 6.3 ? "Watch" : input.trendConsistency >= 6.4 ? "Starter Shares" : "Watch";
+    strategy = riskNumeric >= 3 && averageScore < 63 ? "Watch" : input.trendConsistency >= 64 ? "Starter Shares" : "Watch";
     confidence = confidence === "High" ? "Medium" : confidence;
     reason = riskNumeric >= 3 ? "Setup needs confirmation before new entries." : "Early setup forming; start small only.";
   } else {
@@ -166,18 +196,37 @@ export function evaluateRecommendation(input: RecommendationEngineInput): Recomm
     reason = "Score structure does not support favorable risk/reward.";
   }
 
-  if (volatility >= 7.8 && confidence === "High") {
+  const sentimentPenalty = input.sentiment === "Bearish" ? -15 : input.sentiment === "Neutral" ? -5 : 8;
+  const technicalBias = technical >= 70 ? 1 : technical <= 45 ? -1 : 0;
+  const sentimentBias = sentimentPenalty >= 0 ? 1 : -1;
+  const directionalSpread = Math.abs((technical - fundamental));
+  const strongConflict = directionalSpread >= 28 && technicalBias !== sentimentBias;
+
+  if (strongConflict) {
+    rating = rating === "Strong Buy" ? "Buy" : rating === "Buy" ? "Watch" : rating;
+    confidence = confidence === "High" ? "Medium" : "Low";
+    if (["Buy Shares + Calls", "Buy Calls", "Buy Puts"].includes(strategy)) strategy = "Starter Shares";
+    reason = "Strong signal conflict detected (technical vs sentiment/fundamentals); conviction and aggressiveness reduced.";
+  }
+
+  if (volatility >= 78 && confidence === "High") {
     confidence = "Medium";
     warningReason = "High volatility despite bullish score.";
   }
 
-  if (confidence === "Low" && ["Buy Shares + Calls", "Buy Calls", "Buy Shares", "Starter Shares + Calls on Breakout"].includes(strategy)) {
-    strategy = "Watch";
-    rating = rating === "Strong Buy" ? "Buy" : rating;
-    reason = "Confidence is low due to incomplete data; aggressive strategy downgraded to watch.";
+  if (confidence === "Low") {
+    if (averageScore > 70 && riskNumeric <= 2) {
+      strategy = "Starter Shares";
+      rating = rating === "Strong Buy" ? "Buy" : rating;
+      reason = "Low confidence gating allows only a small share starter above score 70.";
+    } else {
+      strategy = "Watch";
+      rating = rating === "Strong Buy" ? "Buy" : rating;
+      reason = "Low confidence hard gate blocks calls, puts, and aggressive entries.";
+    }
   }
 
-  if (riskNumeric >= 3 && confidence === "Low" && averageScore < 7.3) {
+  if (riskNumeric >= 3 && confidence === "Low" && averageScore < 73) {
     strategy = "Watch";
     rating = rating === "Strong Buy" ? "Buy" : rating;
     reason = "Risk is elevated while conviction is low; stay on watchlist.";
