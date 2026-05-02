@@ -46,6 +46,8 @@ export type RecommendationEngineOutput = {
   confidence: ConfidenceLevel;
   risk: RiskLevel;
   strategy: StrategyRecommendation;
+  positionTier: "Starter" | "Standard" | "Aggressive";
+  reasoning: string;
   reason: string;
   warningReason?: string;
 };
@@ -106,6 +108,27 @@ function baseConfidence(input: RecommendationEngineInput): ConfidenceLevel {
   return "Low";
 }
 
+type PositionTier = RecommendationEngineOutput["positionTier"];
+
+const tierOrder: PositionTier[] = ["Starter", "Standard", "Aggressive"];
+
+function downgradeTier(tier: PositionTier): PositionTier {
+  const idx = tierOrder.indexOf(tier);
+  return idx <= 0 ? "Starter" : tierOrder[idx - 1];
+}
+
+function scoreBasedTier(score: number): PositionTier {
+  if (score >= 85) return "Aggressive";
+  if (score >= 70) return "Standard";
+  return "Starter";
+}
+
+function computeBaseTier(score: number, confidence: ConfidenceLevel): PositionTier {
+  if (confidence === "Low") return "Starter";
+  if (confidence === "Medium") return score >= 70 ? "Standard" : "Starter";
+  return scoreBasedTier(score);
+}
+
 export function evaluateRecommendation(input: RecommendationEngineInput): RecommendationEngineOutput {
   const swing = normalizeScore100(input.swingScore);
   const m3 = normalizeScore100(input.threeMonthScore);
@@ -137,6 +160,8 @@ export function evaluateRecommendation(input: RecommendationEngineInput): Recomm
       confidence: "Low",
       risk: input.riskLevel,
       strategy: "None",
+      positionTier: "Starter",
+      reasoning: "Insufficient critical inputs (price, VWAP, or long-horizon fundamentals).",
       reason: "Insufficient critical inputs (price, VWAP, or long-horizon fundamentals).",
       warningReason: "Insufficient Data",
     };
@@ -147,6 +172,7 @@ export function evaluateRecommendation(input: RecommendationEngineInput): Recomm
   let strategy: StrategyRecommendation = "Watch";
   let reason = "Mixed setup; wait for cleaner confirmation.";
   let warningReason: string | undefined;
+  let positionTier: PositionTier = "Starter";
 
   if (allWeak) {
     rating = "Avoid";
@@ -209,9 +235,30 @@ export function evaluateRecommendation(input: RecommendationEngineInput): Recomm
     reason = "Strong signal conflict detected (technical vs sentiment/fundamentals); conviction and aggressiveness reduced.";
   }
 
+  positionTier = computeBaseTier(averageScore, confidence);
+
+  if (volatility >= 90) {
+    strategy = confidence === "Low" || averageScore < 60 ? "Watch" : "Starter Shares";
+    positionTier = "Starter";
+    rating = rating === "Strong Buy" ? "Buy" : rating;
+    reason = "Extreme volatility override: options are blocked and only watch/starter shares are allowed.";
+    warningReason = warningReason ?? "Extreme volatility regime.";
+  } else if (volatility >= 78) {
+    positionTier = downgradeTier(positionTier);
+
+    if (strategy === "Buy Shares + Calls" || strategy === "Buy Calls") {
+      strategy = "Buy Shares";
+      reason = "High volatility regime: call exposure removed in favor of shares.";
+    }
+  }
+
   if (volatility >= 78 && confidence === "High") {
     confidence = "Medium";
     warningReason = "High volatility despite bullish score.";
+    positionTier = computeBaseTier(averageScore, confidence);
+    if (volatility >= 78) {
+      positionTier = downgradeTier(positionTier);
+    }
   }
 
   if (confidence === "Low") {
@@ -223,6 +270,21 @@ export function evaluateRecommendation(input: RecommendationEngineInput): Recomm
       strategy = "Watch";
       rating = rating === "Strong Buy" ? "Buy" : rating;
       reason = "Low confidence hard gate blocks calls, puts, and aggressive entries.";
+    }
+  }
+
+  if (strategy === "Buy Calls") {
+    const disallowedCalls = confidence !== "High" || volatility >= 78 || positionTier === "Starter";
+    if (disallowedCalls) {
+      strategy = "Buy Shares";
+      reason = "Calls blocked by confidence/volatility/tier gate; switched to shares.";
+    }
+  }
+
+  if (strategy === "Buy Shares + Calls") {
+    if (confidence !== "High" || volatility >= 78 || positionTier === "Starter") {
+      strategy = "Buy Shares";
+      reason = "Aggressive options leg removed due to execution guardrails.";
     }
   }
 
@@ -240,11 +302,22 @@ export function evaluateRecommendation(input: RecommendationEngineInput): Recomm
     }
   }
 
+  if (confidence === "Low" || volatility >= 78 || strongConflict) {
+    positionTier = "Starter";
+  }
+
+  if (strategy === "Buy Calls" && positionTier === "Starter") {
+    strategy = "Buy Shares";
+    reason = "Starter tier does not allow calls; shifted to shares.";
+  }
+
   return {
     rating,
     confidence,
     risk: input.riskLevel,
     strategy,
+    positionTier,
+    reasoning: warningReason ? `${reason} ${warningReason}` : reason,
     reason: warningReason ? `${reason} ${warningReason}` : reason,
     warningReason,
   };
