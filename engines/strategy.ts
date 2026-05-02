@@ -254,6 +254,8 @@ const scaleTo10 = (value: number): number => {
   return value > 10 ? clamp10(clamp(value) / 10) : clamp10(value);
 };
 
+const toScore100 = (value: number): number => Math.max(0, Math.min(100, value <= 10 ? value * 10 : value));
+
 const confidenceToScore = (confidence: ConfidenceLevel): number => {
   if (confidence === "High") return 8.6;
   if (confidence === "Medium") return 6.4;
@@ -739,16 +741,16 @@ function buildEngineInput(params: {
   const newsClarity = clamp10(scaleTo10(num(item.whaleScore, 60)) * 0.5 + scaleTo10(pillars.intelligence) * 0.5);
 
   return {
-    swingScore,
-    threeMonthScore,
-    sixMonthScore,
-    oneYearScore,
-    technicalScore: pillars.technical,
-    fundamentalScore: pillars.fundamental,
+    swingScore: toScore100(swingScore),
+    threeMonthScore: toScore100(threeMonthScore),
+    sixMonthScore: toScore100(sixMonthScore),
+    oneYearScore: toScore100(oneYearScore),
+    technicalScore: toScore100(pillars.technical),
+    fundamentalScore: toScore100(pillars.fundamental),
     sentiment: toSentiment(item.bias),
-    whalesIntel,
-    momentum,
-    volatility: volatilityComposite,
+    whalesIntel: toScore100(whalesIntel),
+    momentum: toScore100(momentum),
+    volatility: toScore100(volatilityComposite),
     riskLevel: riskLabel,
     trendConsistency,
     volumeConfirmation,
@@ -756,7 +758,12 @@ function buildEngineInput(params: {
     volatilityStability,
     multiTimeframeAgreement,
     sectorStrength,
-    newsClarity,
+    newsClarity: toScore100(newsClarity),
+    criticalInputs: {
+      hasPrice: Number.isFinite(item.price) && item.price > 0,
+      hasVwapWhenRequired: Number.isFinite(item.lr50) || Number.isFinite(item.lr100),
+      hasFundamentalsForLongHorizon: Number.isFinite(pillars.fundamental),
+    },
   };
 }
 

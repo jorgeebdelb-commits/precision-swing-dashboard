@@ -44,7 +44,8 @@ export type Strategy =
   | "Buy LEAPS"
   | "Watch"
   | "Avoid"
-  | "Buy Puts";
+  | "Buy Puts"
+  | "None";
 
 export type HorizonKey =
   | "swing"
