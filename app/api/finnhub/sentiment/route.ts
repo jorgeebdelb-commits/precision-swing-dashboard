@@ -65,6 +65,15 @@ function recencyBoost(datetime: number): number {
 
 function scoreHeadline(text: string): number {
   const lower = text.toLowerCase();
+
+  if (lower.includes("not a downgrade risk") || lower.includes("no downgrade risk")) {
+    return 1;
+  }
+
+  if (lower.includes("beat") && lower.includes("warn")) {
+    return 0;
+  }
+
   let score = 0;
 
   for (const word in positiveMap) {
@@ -72,10 +81,13 @@ function scoreHeadline(text: string): number {
   }
 
   for (const word in negativeMap) {
-    if (lower.includes(word)) score += negativeMap[word];
+    if (lower.includes(word)) {
+      const negated = lower.includes(`not ${word}`) || lower.includes(`no ${word}`);
+      if (!negated) score += negativeMap[word];
+    }
   }
 
-  return score;
+  return Math.max(-8, Math.min(8, score));
 }
 
 export async function GET(request: Request) {
@@ -111,8 +123,7 @@ export async function GET(request: Request) {
       const datetime = item.datetime || 0;
 
       const base = scoreHeadline(headline);
-      const weighted =
-        base * sourceBoost(source) * recencyBoost(datetime);
+      const weighted = Math.max(-10, Math.min(10, base * sourceBoost(source) * recencyBoost(datetime)));
 
       total += weighted;
 

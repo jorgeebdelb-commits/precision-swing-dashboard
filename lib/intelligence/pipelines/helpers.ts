@@ -53,6 +53,7 @@ function confidenceFromLayers(params: {
   const confidenceScore =
     trendAlignment + volumeConfirmation + volatilityStability + sectorStrength + signalAgreement + newsClarity - riskPenalty;
 
+  if (marketContext.fundamentalsAvailable === false) return "Low";
   if (confidenceScore >= 72) return "High";
   if (confidenceScore >= 52) return "Medium";
   return "Low";
@@ -67,7 +68,11 @@ export function finalizePipeline(params: {
 }): AnalysisResult {
   const risk = toRisk(params.marketContext.volatility);
   const layerScores = deriveLayerScores({ marketContext: params.marketContext, factorBreakdown: params.factorBreakdown });
-  const decision = buildHorizonDecisionScore(params.horizon, layerScores);
+  let decision = buildHorizonDecisionScore(params.horizon, layerScores);
+
+  if ((params.horizon === "sixMonth" || params.horizon === "oneYear" || params.horizon === "threeMonth") && params.marketContext.fundamentalsAvailable === false) {
+    decision = { ...decision, finalScore: Math.min(decision.finalScore, 64), rating: decision.finalScore >= 50 ? "Watch" : "Avoid" };
+  }
 
   const rawStrategy = recommendStrategy({
     horizon: params.horizon,

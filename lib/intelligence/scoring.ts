@@ -96,14 +96,17 @@ export function deriveLayerScores(params: {
     ])
   );
 
-  const fundamentalScore = clamp100(
-    avg([
-      from10(factorBreakdown.earningsTrend ?? marketContext.macroScore),
-      from10(factorBreakdown.fundamentals ?? factorBreakdown.longTermFundamentals ?? marketContext.macroScore),
-      from10(factorBreakdown.earningsQuality ?? factorBreakdown.balanceSheetQuality ?? marketContext.macroScore),
-      from10(factorBreakdown.valuationRisk ?? factorBreakdown.competitiveMoat ?? marketContext.macroScore),
-    ])
-  );
+  const hasFundamentals = marketContext.fundamentalsAvailable === true;
+  const fundamentalScore = hasFundamentals
+    ? clamp100(
+        avg([
+          from10(factorBreakdown.earningsTrend ?? 5),
+          from10(factorBreakdown.fundamentals ?? factorBreakdown.longTermFundamentals ?? 5),
+          from10(factorBreakdown.earningsQuality ?? factorBreakdown.balanceSheetQuality ?? 5),
+          from10(factorBreakdown.valuationRisk ?? factorBreakdown.competitiveMoat ?? 5),
+        ])
+      )
+    : 50;
 
   const sector = marketContext.sector ?? "";
   const isSemis = sector === "Semiconductors";

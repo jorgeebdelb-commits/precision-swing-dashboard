@@ -23,6 +23,10 @@ export type StrategyRecommendation =
 
 export interface MarketContextSnapshot {
   price: number;
+  priceTimestamp?: number | null;
+  priceStale?: boolean;
+  vwap?: number | null;
+  fundamentalsAvailable?: boolean;
   rsi: number;
   volumeRatio: number;
   technicalScore: number;

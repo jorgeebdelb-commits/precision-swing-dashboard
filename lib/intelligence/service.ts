@@ -7,6 +7,14 @@ import { WATCHLIST_MARKET_CONTEXT_SELECT } from "@/lib/watchlist/dbMapper";
 import { WATCHLIST_TABLE, type WatchlistRow } from "@/lib/watchlist/schema";
 import type { AnalysisHorizon, IntelligenceApiResponse, IntelligenceSymbolSummary, MarketContextSnapshot } from "@/lib/intelligence/types";
 
+interface QuoteSnapshot {
+  price: number;
+  timestamp: number | null;
+  stale: boolean;
+  vwap: number | null;
+  valid: boolean;
+}
+
 interface FlowEventRow {
   symbol: string;
   score: number | null;
@@ -142,8 +150,43 @@ async function persistDashboard(cacheKey: string, payload: IntelligenceApiRespon
   );
 }
 
+
+
+async function fetchQuoteSnapshots(symbols: string[]): Promise<Record<string, QuoteSnapshot>> {
+  const apiKey = process.env.FINNHUB_API_KEY;
+  if (!apiKey) return {};
+
+  const entries = await Promise.all(
+    symbols.map(async (symbol) => {
+      try {
+        const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${apiKey}`, { cache: "no-store" });
+        if (!res.ok) throw new Error(`Quote failed: ${symbol}`);
+        const data = await res.json();
+        const price = Number(data?.c ?? 0);
+        const timestamp = Number.isFinite(Number(data?.t)) ? Number(data.t) : null;
+        const now = Math.floor(Date.now() / 1000);
+        const stale = timestamp == null || timestamp <= 0 || now - timestamp > 900;
+        const vwap = Number(data?.v ?? NaN);
+
+        return [symbol, {
+          price,
+          timestamp,
+          stale,
+          vwap: Number.isFinite(vwap) && vwap > 0 ? vwap : null,
+          valid: Number.isFinite(price) && price > 0 && !stale,
+        } satisfies QuoteSnapshot] as const;
+      } catch {
+        return [symbol, { price: 0, timestamp: null, stale: true, vwap: null, valid: false } satisfies QuoteSnapshot] as const;
+      }
+    })
+  );
+
+  return Object.fromEntries(entries);
+}
 async function buildMarketContext(symbols: string[]): Promise<Record<string, MarketContextSnapshot>> {
   const supabase = getSupabaseServerClient();
+
+  const quoteMap = await fetchQuoteSnapshots(symbols);
 
   const [watchlistRes, flowRes, newsRes] = await Promise.all([
     supabase
@@ -212,8 +255,14 @@ async function buildMarketContext(symbols: string[]): Promise<Record<string, Mar
       ).toFixed(2)
     );
 
+    const quote = quoteMap[row.symbol] ?? { price: 0, timestamp: null, stale: true, vwap: null, valid: false };
+
     acc[row.symbol] = {
-      price: 0,
+      price: quote.price,
+      priceTimestamp: quote.timestamp,
+      priceStale: quote.stale,
+      vwap: quote.vwap,
+      fundamentalsAvailable: false,
       rsi,
       volumeRatio,
       technicalScore: technical,
@@ -274,6 +323,29 @@ export async function getIntelligence(
       const context = marketContext[symbol];
       if (!context) {
         return null;
+      }
+
+      if (!context.price || context.price <= 0 || context.priceStale) {
+        return {
+          symbol,
+          analyses: [
+            {
+              symbol,
+              horizon: (horizon as AnalysisHorizon) ?? "swing",
+              score: 0,
+              rating: "Watch",
+              strategy: "Watchlist Only",
+              confidence: "Low",
+              risk: "High",
+              reason: "Insufficient Data",
+              factorWeights: [],
+              factorBreakdown: {},
+            },
+          ],
+          executionStrategy: "Insufficient Data",
+          bestHorizon: (horizon as AnalysisHorizon) ?? "swing",
+          updatedAt: nowIso,
+        } satisfies IntelligenceSymbolSummary;
       }
 
       const analyses = horizon
@@ -340,7 +412,7 @@ export async function getIntelligence(
           targetPrices: [`${(context.price * 1.04).toFixed(2)}`, `${(context.price * 1.08).toFixed(2)}`],
           catalystContext: bestAnalysis?.reason,
           hasVolumeConfirmation: context.volumeRatio >= 1.05,
-          belowVWAP: context.price < context.price * (1 + context.trendSlope),
+          belowVWAP: context.vwap != null ? context.price < context.vwap : undefined,
           eventRiskHigh: context.earningsDays != null && context.earningsDays <= 5,
         });
 
@@ -373,9 +445,9 @@ export async function getIntelligence(
           symbol,
           price: context.price,
           sector: context.sector,
-          selectedHorizonScores: analyses.reduce((acc, a) => ({ ...acc, [a.horizon]: toTenScale(a.score) }), {}),
+          selectedHorizonScores: analyses.reduce((acc, a) => ({ ...acc, [a.horizon]: a.score / 10 }), {}),
           technicalScore: context.technicalScore,
-          fundamentalScore: analyses.reduce((sum, a) => sum + toTenScale(a.score), 0) / Math.max(1, analyses.length),
+          fundamentalScore: analyses.reduce((sum, a) => sum + a.score / 10, 0) / Math.max(1, analyses.length),
           sentimentScore: context.newsSentiment,
           environmentScore: (context.macroScore + context.politicalScore) / 2,
           momentum: context.flowScore,

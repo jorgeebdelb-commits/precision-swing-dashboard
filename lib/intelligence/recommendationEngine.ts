@@ -171,6 +171,12 @@ export function evaluateRecommendation(input: RecommendationEngineInput): Recomm
     warningReason = "High volatility despite bullish score.";
   }
 
+  if (confidence === "Low" && ["Buy Shares + Calls", "Buy Calls", "Buy Shares", "Starter Shares + Calls on Breakout"].includes(strategy)) {
+    strategy = "Watch";
+    rating = rating === "Strong Buy" ? "Buy" : rating;
+    reason = "Confidence is low due to incomplete data; aggressive strategy downgraded to watch.";
+  }
+
   if (riskNumeric >= 3 && confidence === "Low" && averageScore < 7.3) {
     strategy = "Watch";
     rating = rating === "Strong Buy" ? "Buy" : rating;
