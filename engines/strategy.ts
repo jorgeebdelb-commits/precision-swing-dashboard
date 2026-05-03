@@ -739,6 +739,21 @@ function buildEngineInput(params: {
   const multiTimeframeAgreement = clamp10(9.6 - horizonSpread * 1.2);
   const sectorStrength = clamp10(SECTOR_STRENGTH_BASE[profile.sector] + symbolJitter(item.symbol, 0.35));
   const newsClarity = clamp10(scaleTo10(num(item.whaleScore, 60)) * 0.5 + scaleTo10(pillars.intelligence) * 0.5);
+  const marketTrend: "Bullish" | "Neutral" | "Bearish" =
+    technicals.trendAligned && momentum >= 7
+      ? "Bullish"
+      : !technicals.trendAligned && momentum <= 4.8
+      ? "Bearish"
+      : "Neutral";
+  const marketStrength = Math.round(
+    clamp(
+      toScore100(
+        clamp10(pillars.environment * 0.45 + pillars.technical * 0.25 + momentum * 0.2 + (technicals.trendAligned ? 1 : -1) * 0.5)
+      )
+    )
+  );
+  const volatilityIndex: "Low" | "Moderate" | "High" =
+    volatilityComposite >= 7.5 ? "High" : volatilityComposite <= 4.2 ? "Low" : "Moderate";
 
   return {
     swingScore: toScore100(swingScore),
@@ -763,6 +778,11 @@ function buildEngineInput(params: {
       hasPrice: Number.isFinite(item.price) && item.price > 0,
       hasVwapWhenRequired: Number.isFinite(item.lr50) || Number.isFinite(item.lr100),
       hasFundamentalsForLongHorizon: Number.isFinite(pillars.fundamental),
+    },
+    marketContext: {
+      marketTrend,
+      marketStrength,
+      volatilityIndex,
     },
   };
 }

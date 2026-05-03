@@ -39,6 +39,11 @@ export type RecommendationEngineInput = {
     hasVwapWhenRequired: boolean;
     hasFundamentalsForLongHorizon: boolean;
   };
+  marketContext?: {
+    marketTrend: "Bullish" | "Neutral" | "Bearish";
+    marketStrength: number;
+    volatilityIndex: "Low" | "Moderate" | "High";
+  };
 };
 
 export type RecommendationEngineOutput = {
@@ -50,6 +55,7 @@ export type RecommendationEngineOutput = {
   reasoning: string;
   reason: string;
   warningReason?: string;
+  marketAlignment: "Aligned" | "Against Market" | "Neutral";
 };
 
 const clamp100 = (value: number): number => Math.max(0, Math.min(100, value));
@@ -129,6 +135,13 @@ function computeBaseTier(score: number, confidence: ConfidenceLevel): PositionTi
   return scoreBasedTier(score);
 }
 
+function downgradeRating(rating: RatingLabel): RatingLabel {
+  if (rating === "Strong Buy") return "Buy";
+  if (rating === "Buy") return "Watch";
+  if (rating === "Watch") return "Avoid";
+  return rating;
+}
+
 export function evaluateRecommendation(input: RecommendationEngineInput): RecommendationEngineOutput {
   const swing = normalizeScore100(input.swingScore);
   const m3 = normalizeScore100(input.threeMonthScore);
@@ -164,6 +177,7 @@ export function evaluateRecommendation(input: RecommendationEngineInput): Recomm
       reasoning: "Insufficient critical inputs (price, VWAP, or long-horizon fundamentals).",
       reason: "Insufficient critical inputs (price, VWAP, or long-horizon fundamentals).",
       warningReason: "Insufficient Data",
+      marketAlignment: "Neutral",
     };
   }
 
@@ -311,6 +325,55 @@ export function evaluateRecommendation(input: RecommendationEngineInput): Recomm
     reason = "Starter tier does not allow calls; shifted to shares.";
   }
 
+  const marketTrend = input.marketContext?.marketTrend ?? "Neutral";
+  const marketStrength = clamp100(input.marketContext?.marketStrength ?? 55);
+  const marketVolatility = input.marketContext?.volatilityIndex ?? "Moderate";
+  const bullishStrategy = strategy === "Buy Calls" || strategy === "Buy Shares + Calls" || strategy === "Buy Shares";
+  const bearishStrategy = strategy === "Buy Puts" || strategy === "Avoid";
+  let marketAlignment: RecommendationEngineOutput["marketAlignment"] = "Neutral";
+
+  if (marketTrend === "Bullish") {
+    marketAlignment = bullishStrategy ? "Aligned" : "Against Market";
+  } else if (marketTrend === "Bearish") {
+    marketAlignment = bearishStrategy || strategy === "Watch" || strategy === "Starter Shares" ? "Aligned" : "Against Market";
+  }
+
+  if (marketTrend === "Bearish") {
+    rating = downgradeRating(rating);
+
+    const allowCalls = confidence === "High" && averageScore > 85;
+    if (!allowCalls && (strategy === "Buy Calls" || strategy === "Buy Shares + Calls")) {
+      strategy = averageScore >= 65 ? "Starter Shares" : "Watch";
+      reason = "Bearish market filter blocked call-heavy aggression; shifted to defensive positioning.";
+    }
+  } else if (marketTrend === "Neutral") {
+    if (positionTier === "Aggressive" && confidence !== "High") {
+      positionTier = "Standard";
+      if (strategy === "Buy Shares + Calls") {
+        strategy = "Buy Shares";
+        reason = "Neutral market filter removed aggressive options leg without high confidence.";
+      }
+    }
+  }
+
+  if (marketStrength < 40) {
+    positionTier = downgradeTier(positionTier);
+  }
+
+  if (marketVolatility === "High") {
+    positionTier = downgradeTier(positionTier);
+    if (strategy === "Buy Shares + Calls" || strategy === "Buy Calls") {
+      strategy = "Buy Shares";
+      reason = "High market volatility favors shares over options and reduced sizing.";
+    }
+  }
+
+  if (marketTrend === "Bearish" && marketStrength < 40 && (strategy === "Buy Calls" || strategy === "Buy Shares + Calls")) {
+    strategy = "Starter Shares";
+    positionTier = "Starter";
+    reason = "Safety rule applied: bearish + weak market cannot issue aggressive calls.";
+  }
+
   return {
     rating,
     confidence,
@@ -320,5 +383,6 @@ export function evaluateRecommendation(input: RecommendationEngineInput): Recomm
     reasoning: warningReason ? `${reason} ${warningReason}` : reason,
     reason: warningReason ? `${reason} ${warningReason}` : reason,
     warningReason,
+    marketAlignment,
   };
 }
