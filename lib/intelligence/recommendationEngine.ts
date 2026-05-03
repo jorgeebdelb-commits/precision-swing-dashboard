@@ -36,7 +36,10 @@ export type RecommendationEngineInput = {
   newsClarity: number;
   criticalInputs?: {
     hasPrice: boolean;
-    hasVwapWhenRequired: boolean;
+    hasTrend: boolean;
+    hasMomentum: boolean;
+    hasSentimentOrMacro: boolean;
+    hasVwap: boolean;
     hasFundamentalsForLongHorizon: boolean;
   };
   marketContext?: {
@@ -45,6 +48,8 @@ export type RecommendationEngineInput = {
     volatilityIndex: "Low" | "Moderate" | "High";
   };
 };
+
+export type HorizonDataStatus = "valid" | "limited" | "insufficient";
 
 export type RecommendationEngineOutput = {
   rating: RatingLabel;
@@ -56,6 +61,11 @@ export type RecommendationEngineOutput = {
   reason: string;
   warningReason?: string;
   marketAlignment: "Aligned" | "Against Market" | "Neutral";
+  horizonDataStatus?: {
+    swing: HorizonDataStatus;
+    midTerm: HorizonDataStatus;
+    longTerm: HorizonDataStatus;
+  };
 };
 
 const clamp100 = (value: number): number => Math.max(0, Math.min(100, value));
@@ -161,25 +171,19 @@ export function evaluateRecommendation(input: RecommendationEngineInput): Recomm
   const riskNumeric = riskToNumeric[input.riskLevel];
 
 
-  const hasCriticalData =
-    input.criticalInputs == null ||
-    (input.criticalInputs.hasPrice &&
-      input.criticalInputs.hasVwapWhenRequired &&
-      input.criticalInputs.hasFundamentalsForLongHorizon);
+  const critical = input.criticalInputs;
+  const horizonDataStatus = critical == null
+    ? { swing: "valid" as const, midTerm: "valid" as const, longTerm: "valid" as const }
+    : {
+        swing: critical.hasPrice && critical.hasTrend && critical.hasMomentum ? "valid" : "insufficient",
+        midTerm: critical.hasPrice && critical.hasTrend
+          ? (critical.hasSentimentOrMacro ? "valid" : "limited")
+          : "insufficient",
+        longTerm: critical.hasFundamentalsForLongHorizon ? "valid" : "insufficient",
+      };
 
-  if (!hasCriticalData) {
-    return {
-      rating: "Insufficient Data",
-      confidence: "Low",
-      risk: input.riskLevel,
-      strategy: "None",
-      positionTier: "Starter",
-      reasoning: "Insufficient critical inputs (price, VWAP, or long-horizon fundamentals).",
-      reason: "Insufficient critical inputs (price, VWAP, or long-horizon fundamentals).",
-      warningReason: "Insufficient Data",
-      marketAlignment: "Neutral",
-    };
-  }
+  const missingVwap = critical != null && !critical.hasVwap;
+  const longTermLimited = horizonDataStatus.longTerm === "insufficient";
 
   let rating = scoreToRating(averageScore);
   let confidence = baseConfidence(input);
@@ -368,6 +372,28 @@ export function evaluateRecommendation(input: RecommendationEngineInput): Recomm
     }
   }
 
+
+
+  if (missingVwap) {
+    confidence = confidence === "High" ? "Medium" : "Low";
+    positionTier = downgradeTier(positionTier);
+    if (strategy === "Buy Shares + Calls" || strategy === "Buy Calls") {
+      strategy = "Buy Shares";
+      reason = "VWAP unavailable: VWAP-specific call timing was removed, shares-only stance kept.";
+    }
+  }
+
+  if (longTermLimited) {
+    positionTier = downgradeTier(positionTier);
+    rating = rating === "Strong Buy" ? "Buy" : rating;
+    if (strategy === "Buy Shares + Calls" || strategy === "Buy Calls") {
+      strategy = "Buy Shares";
+    }
+    warningReason = warningReason
+      ? `${warningReason} Long-term fundamentals missing; one-year horizon is blocked.`
+      : "Long-term fundamentals missing; one-year horizon is blocked.";
+  }
+
   if (marketTrend === "Bearish" && marketStrength < 40 && (strategy === "Buy Calls" || strategy === "Buy Shares + Calls")) {
     strategy = "Starter Shares";
     positionTier = "Starter";
@@ -384,5 +410,6 @@ export function evaluateRecommendation(input: RecommendationEngineInput): Recomm
     reason: warningReason ? `${reason} ${warningReason}` : reason,
     warningReason,
     marketAlignment,
+    horizonDataStatus,
   };
 }
