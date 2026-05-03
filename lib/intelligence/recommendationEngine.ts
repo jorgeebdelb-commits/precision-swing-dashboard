@@ -36,11 +36,12 @@ export type RecommendationEngineInput = {
   newsClarity: number;
   criticalInputs?: {
     hasPrice: boolean;
-    hasTrend: boolean;
-    hasMomentum: boolean;
-    hasSentimentOrMacro: boolean;
-    hasVwap: boolean;
-    hasFundamentalsForLongHorizon: boolean;
+    hasTrend?: boolean;
+    hasMomentum?: boolean;
+    hasSentimentOrMacro?: boolean;
+    hasVwap?: boolean;
+    hasVwapWhenRequired?: boolean;
+    hasFundamentalsForLongHorizon?: boolean;
   };
   marketContext?: {
     marketTrend: "Bullish" | "Neutral" | "Bearish";
@@ -172,17 +173,25 @@ export function evaluateRecommendation(input: RecommendationEngineInput): Recomm
 
 
   const critical = input.criticalInputs;
-  const horizonDataStatus = critical == null
+  const horizonDataStatus: NonNullable<RecommendationEngineOutput["horizonDataStatus"]> = critical == null
     ? { swing: "valid" as const, midTerm: "valid" as const, longTerm: "valid" as const }
     : {
-        swing: critical.hasPrice && critical.hasTrend && critical.hasMomentum ? "valid" : "insufficient",
-        midTerm: critical.hasPrice && critical.hasTrend
-          ? (critical.hasSentimentOrMacro ? "valid" : "limited")
-          : "insufficient",
-        longTerm: critical.hasFundamentalsForLongHorizon ? "valid" : "insufficient",
+        swing:
+          critical.hasPrice === false || critical.hasTrend === false || critical.hasMomentum === false
+            ? "insufficient"
+            : "valid",
+        midTerm:
+          critical.hasPrice === false || critical.hasTrend === false
+            ? "insufficient"
+            : critical.hasSentimentOrMacro === false
+            ? "limited"
+            : "valid",
+        longTerm: critical.hasFundamentalsForLongHorizon === false ? "insufficient" : "valid",
       };
 
-  const missingVwap = critical != null && !critical.hasVwap;
+  const missingVwap =
+    critical != null &&
+    (critical.hasVwapWhenRequired === false || (critical.hasVwapWhenRequired == null && critical.hasVwap === false));
   const longTermLimited = horizonDataStatus.longTerm === "insufficient";
 
   let rating = scoreToRating(averageScore);
