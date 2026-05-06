@@ -2029,7 +2029,7 @@ export default function DashboardClientShell() {
               <b>Trigger:</b>
               <pre style={{ margin: "8px 0 0", fontSize: 12, color: "#cbd5e1", whiteSpace: "pre-wrap" }}>{`trigger:
   type: "${selectedActionPlan?.trigger?.type ?? "Breakout"}"
-  level: ${selectedActionPlan?.trigger?.level ?? Number(num(selectedMetrics.price, 0).toFixed(2))}
+  level: ${selectedActionPlan?.trigger?.level ?? Number(num(selectedMetrics.price ?? 0)).toFixed(2)}
   confirmation: "${selectedActionPlan?.trigger?.confirmation ?? "No extra confirmation required."}"
   invalidation: ${selectedActionPlan?.trigger?.invalidation ?? Number(num(selectedMetrics.stopLoss, 0).toFixed(2))}`}</pre>
             </div>
