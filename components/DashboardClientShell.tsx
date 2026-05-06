@@ -287,6 +287,8 @@ function opportunityScoreForPlan(score: number, state: ActionState, confirmation
   return Number(Math.max(0, Math.min(100, score * stateFactor * confirmationFactor * riskFactor)).toFixed(2));
 }
 
+type SetupTriggerType = "Breakout" | "Pullback" | "Reversal";
+
 function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey) {
   const decision = buildDecision(metrics, engine);
   const score = toDisplayScore(engineScore(metrics, engine));
@@ -382,6 +384,20 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
       : state === "EXTENDED"
       ? "Pullback (support/LR50)"
       : "Pullback (support/LR50)";
+  const triggerType: SetupTriggerType =
+    state === "SETUP" || state === "READY"
+      ? "Breakout"
+      : state === "EXTENDED"
+      ? "Pullback"
+      : "Reversal";
+  const triggerLevel = Number((state === "EXTENDED" ? lr50 : state === "BREAKDOWN" ? support : safeResistance).toFixed(2));
+  const triggerInvalidation = Number(stopValue.toFixed(2));
+  const triggerConfirmation =
+    state === "SETUP" || state === "READY"
+      ? `Close above ${formatPrice(safeResistance)} OR volume > 1.2x average.`
+      : state === "EXTENDED"
+      ? `Close above ${formatPrice(lr50)} OR volume > 1.0x average.`
+      : `Close below ${formatPrice(support)} OR volume > 1.1x average.`;
   const defaultEntry = state === "EXTENDED" ? lr50 : state === "SETUP" ? safeResistance : state === "BREAKDOWN" ? support * 0.995 : price;
   const riskPerShare = Math.max(defaultEntry - stopValue, Math.max(defaultEntry * 0.01, 0.1));
   const target1 = formatPrice(defaultEntry + riskPerShare);
@@ -406,6 +422,12 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
         : strategyForState(state, decision.signal, strategy, score, decision.risk),
     confirmation,
     entryType,
+    trigger: {
+      type: triggerType,
+      level: triggerLevel,
+      confirmation: triggerConfirmation,
+      invalidation: triggerInvalidation,
+    },
     entryPrice: formatPrice(defaultEntry),
     opportunityScore: state === "NO_TRADE" ? 0 : opportunityScoreForPlan(score, state, confirmation, decision.risk),
     decision,
@@ -2003,8 +2025,14 @@ export default function DashboardClientShell() {
             />
             <p><b>State:</b> <span style={{ color: selectedActionPlan?.color ?? "#f59e0b" }}>{selectedActionPlan?.state ?? "SETUP"}</span></p>
             <p><b>Entry:</b> {selectedActionPlan?.entry ?? selectedMetrics.entryZone}</p>
-            <p><b>Entry Trigger:</b> {selectedActionPlan?.entryTrigger ?? selectedMetrics.entryZone}</p>
-            <p><b>Confirmation:</b> {selectedActionPlan?.confirmationCondition ?? "No extra confirmation required."}</p>
+            <div>
+              <b>Trigger:</b>
+              <pre style={{ margin: "8px 0 0", fontSize: 12, color: "#cbd5e1", whiteSpace: "pre-wrap" }}>{`trigger:
+  type: "${selectedActionPlan?.trigger?.type ?? "Breakout"}"
+  level: ${selectedActionPlan?.trigger?.level ?? Number(num(selectedMetrics.price, 0).toFixed(2))}
+  confirmation: "${selectedActionPlan?.trigger?.confirmation ?? "No extra confirmation required."}"
+  invalidation: ${selectedActionPlan?.trigger?.invalidation ?? Number(num(selectedMetrics.stopLoss, 0).toFixed(2))}`}</pre>
+            </div>
             <p><b>Stop Loss:</b> {selectedActionPlan?.stopLoss ?? selectedMetrics.stopLoss}</p>
             <p><b>Target Levels:</b> {selectedActionPlan?.targetLevels ?? `${selectedMetrics.target1} / ${selectedMetrics.target2}`}</p>
             <p><b>Position Size:</b> {selectedActionPlan?.positionSize ?? selectedMetrics.positionSizing}</p>
@@ -2197,7 +2225,9 @@ export default function DashboardClientShell() {
                 </td>
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 800, color: actionPlan.color }}>{actionPlan.state}</td>
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 800, color: riskColor(decision.risk) }}>{decision.risk}</td>
-                <td style={{ padding: 9, textAlign: "left", fontSize: 12, minWidth: 220 }}>{actionPlan.entryTrigger}</td>
+                <td style={{ padding: 9, textAlign: "left", fontSize: 12, minWidth: 220 }}>
+                  {`${actionPlan.trigger.type} @ ${actionPlan.trigger.level} | ${actionPlan.trigger.confirmation} | invalidation ${actionPlan.trigger.invalidation}`}
+                </td>
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 700 }}>{actionPlan.stopLoss}</td>
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 700 }}>{actionPlan.targetLevels}</td>
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 700 }}>{actionPlan.positionSize}</td>
