@@ -106,6 +106,7 @@ export type RowMetrics = {
   opportunityScore: number;
   entryZone: string;
   stopLoss: string;
+  price?: number;
   target1: string;
   target2: string;
   positionSizing: string;
@@ -1179,6 +1180,7 @@ export function computeMetrics(item: Item): RowMetrics {
     confidenceLabel,
     marketRegime,
     opportunityScore,
+    price: num(item.price),
     entryZone: tradePlan.entryZone,
     stopLoss: tradePlan.stopLoss,
     target1: tradePlan.target1,
