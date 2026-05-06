@@ -316,6 +316,22 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
   const weakSetup = !validStructure || confirmationForSetup(volumeRatio, trendSlope) === "Weak" || score < 70;
   const setupBlockedByHighRiskConfidence = decision.risk === "High" && metrics.confidencePercent < 72;
   const extremeNoTrade = decision.risk === "Extreme" && score < 70;
+  const mediumConfidence = metrics.confidencePercent >= 60 && metrics.confidencePercent <= 75;
+  const directionalBiasExists = decision.signal === "Bullish" || decision.signal === "Bearish";
+  const structureForming =
+    price > 0 &&
+    support > 0 &&
+    validResistance > support &&
+    lr50 >= lr100 * 0.985 &&
+    trendSlope > -0.01;
+  const setupCandidate =
+    score >= 60 &&
+    score <= 75 &&
+    mediumConfidence &&
+    decision.risk === "High" &&
+    !extremeNoTrade &&
+    directionalBiasExists;
+  const convertAvoidToSetup = strategy === "Avoid" && score >= 60 && score <= 75 && structureForming;
   const baseState: ActionState = isBreakdown
     ? "BREAKDOWN"
     : isExtended
@@ -327,6 +343,8 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
     : "SETUP";
   const state: ActionState = extremeNoTrade
     ? "NO_TRADE"
+    : convertAvoidToSetup || setupCandidate
+    ? "SETUP"
     : (baseState === "SETUP" && setupBlockedByHighRiskConfidence)
     ? "NO_TRADE"
     : (baseState === "READY" && (decision.risk === "High" || decision.risk === "Extreme"))
@@ -336,7 +354,7 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
   const confirmationCondition =
     state === "NO_TRADE"
       ? setupBlockedByHighRiskConfidence
-        ? "Risk is High and confidence is below 72; setup is non-actionable."
+        ? "WAITING FOR CONFIRMATION: Risk is High and confidence is below 72; no entry until risk normalizes."
         : "Risk is Extreme with confidence below threshold; setup is non-actionable."
       : state === "SETUP"
       ? `Reclaim ${formatPrice(safeResistance)} with volume > 1.2x.`
@@ -346,14 +364,14 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
 
   const entryTrigger =
     state === "NO_TRADE"
-      ? "Stand aside until risk normalizes or confidence improves."
+      ? "WAITING FOR CONFIRMATION: Prepare for entry if conditions improve."
       : state === "EXTENDED"
       ? `Wait for pullback to LR50 near ${formatPrice(lr50)}.`
       : state === "BREAKDOWN"
       ? `Enter puts on breakdown below ${formatPrice(support)}.`
       : state === "READY"
       ? `Enter now around ${formatPrice(price)} or minor pullback to ${formatPrice(Math.max(support, price - width * 0.15))}.`
-      : `Enter on resistance reclaim above ${formatPrice(safeResistance)}.`;
+      : `WAITING FOR CONFIRMATION: Breakout above ${formatPrice(safeResistance)}, volume spike > 1.2x, and reclaim hold.`;
 
   const stopValue = Math.min(lr100, support - width * 0.12);
   const entryType =
