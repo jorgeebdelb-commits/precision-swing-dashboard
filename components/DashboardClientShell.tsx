@@ -271,10 +271,11 @@ function strategyForState(
   signal: DecisionSignal,
   strategy: Strategy,
   confidence: number,
-  risk: RiskLabel
+  risk: RiskLabel,
+  breakoutConfirmed: boolean
 ): "Starter Shares" | "Calls" | "Puts" | "Speculative Shares" | "Speculative Calls" | "LEAPS Calls" {
   const speculative = risk === "Extreme";
-  const allowCalls = (state === "READY" || state === "SETUP") && confidence >= 70 && (!speculative || state === "READY");
+  const allowCalls = state === "READY" && breakoutConfirmed && confidence >= 70 && !speculative;
   const allowPuts = state === "BREAKDOWN" || signal === "Bearish" || strategy === "Buy Puts";
   if (allowPuts) return speculative ? "Speculative Shares" : "Puts";
   if (allowCalls) {
@@ -429,7 +430,7 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
         ? "Puts"
         : weakSetup
         ? "Starter Shares"
-        : strategyForState(state, decision.signal, strategy, score, decision.risk),
+        : strategyForState(state, decision.signal, strategy, score, decision.risk, state === "READY" && confirmation === "Confirmed"),
     confirmation,
     entryType,
     trigger: {
