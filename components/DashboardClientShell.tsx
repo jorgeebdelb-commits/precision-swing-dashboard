@@ -19,6 +19,7 @@ import {
 } from "@/lib/watchlist/dbMapper";
 import { WATCHLIST_SELECT, WATCHLIST_TABLE, type WatchlistRow } from "@/lib/watchlist/schema";
 import InfoHelp from "@/components/ui/InfoHelp";
+import { generateTradeDeployment, type DeploymentHorizon, type RiskStyle, type StrategyType } from "@/lib/intelligence/tradeDeployment";
 
 type ChartRange = "1D" | "5D" | "1M";
 
@@ -39,8 +40,6 @@ type Tradeability = "Full Size" | "Starter Size" | "Speculative" | "Avoid";
 type ActionState = "READY" | "SETUP" | "EXTENDED" | "BREAKDOWN" | "NO_TRADE";
 type ConfirmationLabel = "Confirmed" | "Pending" | "Weak";
 
-type RiskStyle = "Conservative" | "Balanced" | "Aggressive";
-type HorizonFocus = "Swing" | "3 Month" | "6 Month" | "1 Year";
 
 const HORIZON_OPTIONS: Array<{ key: EngineKey; label: string }> = [
   { key: "swing", label: "Swing (<3M)" },
@@ -456,21 +455,6 @@ function bestStrategy(metrics: RowMetrics): Strategy {
   return ranked[0]?.strategy ?? metrics.strategy;
 }
 
-function inferSectorForSymbol(symbol: string): string {
-  const upperSymbol = symbol.toUpperCase();
-  if (["NVDA", "AMD", "MRVL", "AVGO", "TSM"].includes(upperSymbol)) return "Semiconductors";
-  if (["AMZN", "MSFT", "META", "GOOGL", "AAPL"].includes(upperSymbol)) return "Megacap Tech";
-  if (["TSLA", "RIVN", "LCID"].includes(upperSymbol)) return "EV";
-  if (["MARA", "WULF", "RIOT", "CLSK", "IREN"].includes(upperSymbol)) return "Crypto Mining";
-  if (["JOBY", "ACHR"].includes(upperSymbol)) return "Industrials";
-  if (["IBRX", "LLY", "PFE", "JNJ"].includes(upperSymbol)) return "Healthcare";
-  if (["QUBT", "QBTS", "RGTI", "IONQ"].includes(upperSymbol)) return "Quantum / Frontier Tech";
-  if (["XOM", "CVX", "SLB"].includes(upperSymbol)) return "Energy";
-  if (["JPM", "MS", "GS"].includes(upperSymbol)) return "Financials";
-  if (["CAT", "GE", "DE"].includes(upperSymbol)) return "Industrials";
-  return "Other";
-}
-
 const WATCHLIST_CACHE_KEY = "precision-dashboard-watchlist-cache";
 const SELECTED_SYMBOL_KEY = "precision-dashboard-selected-symbol";
 
@@ -559,9 +543,9 @@ export default function DashboardClientShell() {
 
   const [history, setHistory] = useState<{ time: string; price: number }[]>([]);
   const [chartRange, setChartRange] = useState<ChartRange>("1D");
-  const [portfolioCapitalInput, setPortfolioCapitalInput] = useState("0");
-  const [portfolioRiskStyle, setPortfolioRiskStyle] = useState<RiskStyle>("Balanced");
-  const [portfolioHorizonFocus, setPortfolioHorizonFocus] = useState<HorizonFocus>("Swing");
+  const [capitalToDeployInput, setCapitalToDeployInput] = useState("0");
+  const [deploymentRiskStyle, setDeploymentRiskStyle] = useState<RiskStyle>("Balanced");
+  const [deploymentStrategyType, setDeploymentStrategyType] = useState<StrategyType>("Auto");
   const [watchlistHorizon, setWatchlistHorizon] = useState<EngineKey>("swing");
   const latestItemsRef = useRef<Item[]>([]);
 
@@ -772,138 +756,23 @@ export default function DashboardClientShell() {
     [sortedRows]
   );
 
-  const portfolioPlan = useMemo(() => {
-    const totalCapital = Math.max(0, Number.parseFloat(portfolioCapitalInput.replace(/[^\d.]/g, "")) || 0);
-    if (totalCapital <= 0) {
-      return {
-        totalCapital: 0,
-        deployableCapital: 0,
-        cashReserve: 0,
-        topAllocations: [],
-        weightedRisk: 0,
-        sectorConcentration: [],
-      };
-    }
-    const deployBase =
-      portfolioRiskStyle === "Conservative" ? 0.58 : portfolioRiskStyle === "Aggressive" ? 0.9 : 0.75;
-    const focusKey =
-      portfolioHorizonFocus === "Swing"
-        ? "swing"
-        : portfolioHorizonFocus === "3 Month"
-        ? "threeMonth"
-        : portfolioHorizonFocus === "6 Month"
-        ? "sixMonth"
-        : "oneYear";
-
-    const confidenceByLabel: Record<RowMetrics["confidenceLabel"], number> = {
-      High: 1,
-      Medium: 0.78,
-      Low: 0.56,
+  const tradeDeployment = useMemo(() => {
+    const capitalToDeploy = Math.max(0, Number.parseFloat(capitalToDeployInput.replace(/[^\d.]/g, "")) || 0);
+    const horizonMap: Record<EngineKey, DeploymentHorizon> = {
+      swing: "Swing",
+      threeMonth: "3 Month",
+      sixMonth: "6 Month",
+      oneYear: "1 Year",
     };
-
-    const strategyWeight = (strategy: string) => {
-      if (strategy.includes("Avoid")) return 0;
-      if (strategy.includes("Puts")) return 0.6;
-      if (strategy.includes("Calls")) return 1.15;
-      if (strategy.includes("Shares")) return 1;
-      return 0.82;
-    };
-
-    const vehicleFromStrategy = (strategy: Strategy) => {
-      switch (strategy) {
-        case "Buy Puts":
-          return "Puts";
-        case "Buy Calls":
-        case "Buy LEAPS":
-          return "Calls";
-        case "Buy Shares + Calls":
-        case "Starter Shares + Calls on Breakout":
-          return "Shares + Calls";
-        case "Avoid":
-        case "Watch":
-        case "Hedge Only":
-          return "Cash";
-        case "Spec Buy":
-          return "Speculative Shares";
-        case "Buy Shares":
-        case "Starter Shares":
-          return "Shares";
-        default:
-          return "Cash";
-      }
-    };
-
-    const ranked = sortedRows
-      .map(({ item, metrics }, rankIndex) => {
-        const resolvedStrategy = bestStrategy(metrics);
-        const horizonScore =
-          focusKey === "swing"
-            ? metrics.swing
-            : focusKey === "threeMonth"
-            ? metrics.threeMonth
-            : focusKey === "sixMonth"
-            ? metrics.sixMonth
-            : metrics.oneYear;
-        const confidenceFactor = confidenceByLabel[metrics.confidenceLabel] ?? 0.6;
-        const rankFactor = Math.max(0.3, 1 - rankIndex * 0.06);
-        const executionFactor = strategyWeight(resolvedStrategy);
-        const rawWeight = Math.max(0, horizonScore / 10) * confidenceFactor * rankFactor * executionFactor;
-        return {
-          symbol: item.symbol,
-          strategy: resolvedStrategy,
-          riskLabel: engineRisk(metrics, focusKey),
-          riskScore: metrics.riskScore,
-          sector: inferSectorForSymbol(item.symbol),
-          vehicle: vehicleFromStrategy(resolvedStrategy),
-          rawWeight,
-        };
-      })
-      .filter((x) => x.rawWeight > 0);
-
-    const totalWeight = ranked.reduce((sum, row) => sum + row.rawWeight, 0);
-    const confidenceDrag = ranked.length
-      ? ranked.reduce((sum, row) => {
-          const confidence = sortedRows.find((x) => x.item.symbol === row.symbol)?.metrics.confidenceLabel ?? "Low";
-          return sum + confidenceByLabel[confidence];
-        }, 0) / ranked.length
-      : 0.6;
-
-    const deployableCapital = totalCapital * deployBase * (0.85 + confidenceDrag * 0.2);
-    const cashReserve = Math.max(0, totalCapital - deployableCapital);
-
-    const allocations = ranked
-      .map((row) => ({
-        ...row,
-        dollars: totalWeight > 0 ? (row.rawWeight / totalWeight) * deployableCapital : 0,
-      }))
-      .sort((a, b) => b.dollars - a.dollars);
-
-    const topAllocations = allocations.slice(0, 5);
-
-    const weightedRisk = deployableCapital
-      ? allocations.reduce((sum, row) => sum + row.riskScore * row.dollars, 0) / deployableCapital
-      : 0;
-    const sectorMap = allocations.reduce<Record<string, number>>((acc, row) => {
-      acc[row.sector] = (acc[row.sector] ?? 0) + row.dollars;
-      return acc;
-    }, {});
-    const sectorConcentration = Object.entries(sectorMap)
-      .map(([sector, dollars]) => ({
-        sector,
-        pct: deployableCapital > 0 ? (dollars / deployableCapital) * 100 : 0,
-      }))
-      .sort((a, b) => b.pct - a.pct)
-      .slice(0, 3);
-
-    return {
-      totalCapital,
-      deployableCapital,
-      cashReserve,
-      topAllocations,
-      weightedRisk,
-      sectorConcentration,
-    };
-  }, [portfolioCapitalInput, portfolioHorizonFocus, portfolioRiskStyle, sortedRows]);
+    return generateTradeDeployment({
+      selectedTicker: selectedItem,
+      selectedAnalysis: selectedMetrics,
+      capitalToDeploy,
+      horizon: horizonMap[watchlistHorizon],
+      riskStyle: deploymentRiskStyle,
+      strategyType: deploymentStrategyType,
+    });
+  }, [capitalToDeployInput, deploymentRiskStyle, deploymentStrategyType, selectedItem, selectedMetrics, watchlistHorizon]);
 
   const handleLogin = () => {
     if (!sitePassword) {
@@ -1894,135 +1763,40 @@ export default function DashboardClientShell() {
 
           <div style={{ ...panelStyle(), padding: 16, marginTop: 18 }}>
             <SectionHelp
-              title="Portfolio Allocation Engine"
-              content="Deployable capital is what the system suggests putting to work now. Cash reserve is dry powder. Allocation sizing and sector concentration help avoid overexposure while keeping risk balanced."
+              title="Trade Deployment Engine"
+              content="This engine converts the selected ticker analysis into a position-size, entry, exit, and risk-management plan based on the capital you choose to deploy."
             />
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(160px, 1fr))", gap: 10 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(150px, 1fr))", gap: 10 }}>
               <label style={{ fontSize: 12, color: "#94a3b8" }}>
-                Total Capital
-                <input
-                  value={portfolioCapitalInput}
-                  onChange={(e) => setPortfolioCapitalInput(e.target.value)}
-                  inputMode="decimal"
-                  style={{
-                    marginTop: 6,
-                    width: "100%",
-                    padding: 10,
-                    borderRadius: 10,
-                    border: "1px solid rgba(148,163,184,0.2)",
-                    background: "#0b1220",
-                    color: "#f8fafc",
-                  }}
-                />
+                Capital to Deploy
+                <input value={capitalToDeployInput} onChange={(e) => setCapitalToDeployInput(e.target.value)} inputMode="decimal" style={{ marginTop: 6, width: "100%", padding: 10, borderRadius: 10, border: "1px solid rgba(148,163,184,0.2)", background: "#0b1220", color: "#f8fafc" }} />
               </label>
               <label style={{ fontSize: 12, color: "#94a3b8" }}>
                 Risk Style
-                <select
-                  value={portfolioRiskStyle}
-                  onChange={(e) => setPortfolioRiskStyle(e.target.value as RiskStyle)}
-                  style={{
-                    marginTop: 6,
-                    width: "100%",
-                    padding: 10,
-                    borderRadius: 10,
-                    border: "1px solid rgba(148,163,184,0.2)",
-                    background: "#0b1220",
-                    color: "#f8fafc",
-                  }}
-                >
-                  {(["Conservative", "Balanced", "Aggressive"] as const).map((style) => (
-                    <option key={style} value={style}>
-                      {style}
-                    </option>
-                  ))}
+                <select value={deploymentRiskStyle} onChange={(e) => setDeploymentRiskStyle(e.target.value as RiskStyle)} style={{ marginTop: 6, width: "100%", padding: 10, borderRadius: 10, border: "1px solid rgba(148,163,184,0.2)", background: "#0b1220", color: "#f8fafc" }}>
+                  {(["Conservative", "Balanced", "Aggressive"] as const).map((style) => <option key={style} value={style}>{style}</option>)}
+                </select>
+              </label>
+              <label style={{ fontSize: 12, color: "#94a3b8" }}>
+                Strategy Type
+                <select value={deploymentStrategyType} onChange={(e) => setDeploymentStrategyType(e.target.value as StrategyType)} style={{ marginTop: 6, width: "100%", padding: 10, borderRadius: 10, border: "1px solid rgba(148,163,184,0.2)", background: "#0b1220", color: "#f8fafc" }}>
+                  {(["Auto", "Shares", "Calls", "Puts", "Hybrid"] as const).map((style) => <option key={style} value={style}>{style}</option>)}
                 </select>
               </label>
               <label style={{ fontSize: 12, color: "#94a3b8" }}>
                 Horizon Focus
-                <select
-                  value={portfolioHorizonFocus}
-                  onChange={(e) => setPortfolioHorizonFocus(e.target.value as HorizonFocus)}
-                  style={{
-                    marginTop: 6,
-                    width: "100%",
-                    padding: 10,
-                    borderRadius: 10,
-                    border: "1px solid rgba(148,163,184,0.2)",
-                    background: "#0b1220",
-                    color: "#f8fafc",
-                  }}
-                >
-                  {(["Swing", "3 Month", "6 Month", "1 Year"] as const).map((focus) => (
-                    <option key={focus} value={focus}>
-                      {focus}
-                    </option>
-                  ))}
-                </select>
+                <input value={watchlistHorizon === "swing" ? "Swing" : watchlistHorizon === "threeMonth" ? "3 Month" : watchlistHorizon === "sixMonth" ? "6 Month" : "1 Year"} readOnly style={{ marginTop: 6, width: "100%", padding: 10, borderRadius: 10, border: "1px solid rgba(148,163,184,0.2)", background: "#0b1220", color: "#f8fafc" }} />
               </label>
             </div>
 
-            <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(2, minmax(180px, 1fr))", gap: 10 }}>
-              <div style={statCardStyle()}>
-                <div style={{ fontSize: 12, color: "#94a3b8" }}>Deployable Capital</div>
-                <div style={{ marginTop: 4, fontWeight: 900, fontSize: 19, color: "#67e8f9" }}>
-                  ${portfolioPlan.deployableCapital.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                </div>
-              </div>
-              <div style={statCardStyle()}>
-                <div style={{ fontSize: 12, color: "#94a3b8" }}>Cash Reserve</div>
-                <div style={{ marginTop: 4, fontWeight: 900, fontSize: 19, color: "#cbd5e1" }}>
-                  ${portfolioPlan.cashReserve.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                </div>
-              </div>
-            </div>
-
-            <div style={{ marginTop: 12 }}>
-              <h4 style={{ margin: "0 0 8px 0", color: "#f8fafc" }}>Top Recommended Allocations</h4>
-              {portfolioPlan.topAllocations.length ? (
-                <div style={{ display: "grid", gap: 8 }}>
-                  {portfolioPlan.topAllocations.map((allocation) => (
-                    <div
-                      key={allocation.symbol}
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "1.1fr 0.8fr 0.9fr 1.2fr",
-                        gap: 8,
-                        padding: "10px 12px",
-                        borderRadius: 12,
-                        border: "1px solid rgba(148,163,184,0.14)",
-                        background: "rgba(15,23,42,0.8)",
-                        alignItems: "center",
-                      }}
-                    >
-                      <div style={{ fontWeight: 800, color: "#f8fafc" }}>{allocation.symbol}</div>
-                      <div style={{ color: "#67e8f9", fontWeight: 700 }}>
-                        ${allocation.dollars.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                      </div>
-                      <div style={{ color: "#cbd5e1", fontSize: 13 }}>{allocation.vehicle}</div>
-                      <div style={{ color: riskColor(allocation.riskLabel), fontSize: 13 }}>
-                        {allocation.riskLabel} • {allocation.strategy}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p style={{ color: "#94a3b8", margin: 0 }}>No deployable allocations available.</p>
-              )}
-            </div>
-
-            <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
-              <div style={{ color: "#cbd5e1", fontSize: 13 }}>
-                <b>Risk Summary:</b> Weighted portfolio risk score {portfolioPlan.weightedRisk.toFixed(1)} / 10
-              </div>
-              <div style={{ color: "#cbd5e1", fontSize: 13 }}>
-                <b>Sector Concentration:</b>{" "}
-                {portfolioPlan.sectorConcentration.length
-                  ? portfolioPlan.sectorConcentration
-                      .map((x) => `${x.sector} ${x.pct.toFixed(0)}%`)
-                      .join(" • ")
-                  : "Not enough data"}
-              </div>
-            </div>
+            {!tradeDeployment ? <p style={{ color: "#94a3b8", marginTop: 12 }}>Enter capital &gt; 0 with a selected ticker to generate deployment.</p> : <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+              <div style={statCardStyle()}><b>Recommended Trade Structure</b><div style={{ marginTop: 8, color: "#cbd5e1" }}>{tradeDeployment.sharesPlan.action} @ ${tradeDeployment.sharesPlan.entryPrice.toFixed(2)}</div><div style={{ color: "#cbd5e1" }}>{tradeDeployment.optionsPlan.action}{tradeDeployment.optionsPlan.contractType !== "None" ? ` • ${tradeDeployment.optionsPlan.expiration} • $${tradeDeployment.optionsPlan.strike} strike • est premium $${tradeDeployment.optionsPlan.estimatedPremium}` : ""}</div><div style={{ color: "#67e8f9", marginTop: 6 }}>Capital Used: ${tradeDeployment.capitalUsed.toFixed(0)} of ${tradeDeployment.capitalToDeploy.toFixed(0)}</div></div>
+              <div style={statCardStyle()}><b>Entry Plan</b><div style={{ marginTop: 8, color: "#cbd5e1" }}>Starter Entry: ${tradeDeployment.entryPlan.starterEntry?.toFixed(2)}</div><div style={{ color: "#cbd5e1" }}>Add Zone: {tradeDeployment.entryPlan.addZone}</div><div style={{ color: "#cbd5e1" }}>Breakout Add: {tradeDeployment.entryPlan.breakoutAdd}</div></div>
+              <div style={statCardStyle()}><b>Profit Path</b><div style={{ marginTop: 8, color: "#cbd5e1" }}>Target 1: ${tradeDeployment.profitTargets.target1Price?.toFixed(2)} (+{tradeDeployment.expectedReturn.minimumTargetPercent}%)</div><div style={{ color: "#cbd5e1" }}>Target 2: ${tradeDeployment.profitTargets.target2Price?.toFixed(2)}</div><div style={{ color: "#cbd5e1" }}>Runner: {tradeDeployment.profitTargets.runnerPlan}</div></div>
+              <div style={statCardStyle()}><b>Risk Management</b><div style={{ marginTop: 8, color: "#cbd5e1" }}>Stop Loss: ${tradeDeployment.riskManagement.stopLossPrice?.toFixed(2)}</div><div style={{ color: "#cbd5e1" }}>Max Risk: ${tradeDeployment.riskManagement.maxDollarRisk.toFixed(0)} / {tradeDeployment.riskManagement.maxPercentRisk.toFixed(1)}%</div><div style={{ color: "#cbd5e1" }}>Options Stop: -{tradeDeployment.riskManagement.optionStopPercent}%</div></div>
+              <div style={statCardStyle()}><b>Trade Quality</b><div style={{ marginTop: 8, color: "#cbd5e1" }}>Technicals: {tradeDeployment.tradeQuality.technicals}/10 • Momentum: {tradeDeployment.tradeQuality.momentum}/10</div><div style={{ color: "#cbd5e1" }}>Sentiment: {tradeDeployment.tradeQuality.sentiment}/10 • Macro: {tradeDeployment.tradeQuality.macro}/10 • Options: {tradeDeployment.tradeQuality.options}/10</div><div style={{ color: "#f8fafc" }}>Overall: {tradeDeployment.tradeQuality.overall}/10</div></div>
+              {tradeDeployment.warnings.length > 0 && <div style={{ ...statCardStyle(), border: "1px solid rgba(251,191,36,0.4)", color: "#fde68a" }}>{tradeDeployment.warnings.map((w) => <div key={w}>• {w}</div>)}</div>}
+            </div>}
           </div>
 
         </div>
