@@ -199,18 +199,28 @@ function strategyForEngine(metrics: RowMetrics, engine: EngineKey): Strategy {
 }
 
 function decisionSignal(metrics: RowMetrics, engine: EngineKey): DecisionSignal {
-  const strategy = strategyForEngine(metrics, engine);
-  if (strategy === "Avoid" || strategy === "Buy Puts") return "Bearish";
-  if (
-    strategy === "Buy Shares" ||
-    strategy === "Spec Buy" ||
-    strategy === "Buy Shares + Calls" ||
-    strategy === "Buy Calls" ||
-    strategy === "Starter Shares" ||
-    strategy === "Starter Shares + Calls on Breakout"
-  ) {
-    return "Bullish";
-  }
+  const engineMomentum =
+    engine === "swing"
+      ? metrics.momentumToday
+      : engine === "threeMonth"
+      ? metrics.swing * 10
+      : engine === "sixMonth"
+      ? metrics.threeMonth * 10
+      : metrics.sixMonth * 10;
+  const trendStrength =
+    engine === "swing"
+      ? metrics.swing * 10
+      : engine === "threeMonth"
+      ? metrics.threeMonth * 10
+      : engine === "sixMonth"
+      ? metrics.sixMonth * 10
+      : metrics.oneYear * 10;
+  const structureBias = metrics.technical * 10;
+  const biasStrength = (metrics.technical * 0.58 + metrics.fundamental * 0.42) * 10;
+
+  if (trendStrength >= 62 && engineMomentum >= 55 && structureBias >= 58 && biasStrength >= 56) return "Bullish";
+  if (trendStrength <= 44 && engineMomentum <= 45 && structureBias <= 48 && biasStrength <= 48) return "Bearish";
+
   const verdict = engineVerdict(metrics, engine);
   if (verdict === "Strong Buy" || verdict === "Buy") return "Bullish";
   if (verdict === "Caution" || verdict === "Avoid" || verdict === "Strong Avoid") return "Bearish";
@@ -394,10 +404,10 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
   const triggerInvalidation = Number(stopValue.toFixed(2));
   const triggerConfirmation =
     state === "SETUP" || state === "READY"
-      ? `Close above ${formatPrice(safeResistance)} OR volume > 1.2x average.`
+      ? `Close above ${formatPrice(safeResistance)}.`
       : state === "EXTENDED"
-      ? `Close above ${formatPrice(lr50)} OR volume > 1.0x average.`
-      : `Close below ${formatPrice(support)} OR volume > 1.1x average.`;
+      ? `Close above ${formatPrice(lr50)}.`
+      : `Close below ${formatPrice(support)}.`;
   const defaultEntry = state === "EXTENDED" ? lr50 : state === "SETUP" ? safeResistance : state === "BREAKDOWN" ? support * 0.995 : price;
   const riskPerShare = Math.max(defaultEntry - stopValue, Math.max(defaultEntry * 0.01, 0.1));
   const target1 = formatPrice(defaultEntry + riskPerShare);
