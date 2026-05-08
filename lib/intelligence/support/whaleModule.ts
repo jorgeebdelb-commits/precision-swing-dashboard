@@ -1,6 +1,7 @@
-import type { SymbolInput, WhaleModuleOutput } from "@/lib/intelligence/types/battlefield";
+import type { WhaleModuleOutput } from "@/lib/intelligence/types/battlefield";
+import type { NormalizedSymbolInput } from "@/lib/intelligence/adapters/normalizeSymbolInput";
 
-export function runWhaleModule(input: SymbolInput): WhaleModuleOutput {
+export function runWhaleModule(input: NormalizedSymbolInput): WhaleModuleOutput {
   const trapRisk = input.volumeRatio > 1.9 && input.rsi > 70 ? "High" : input.volumeRatio > 1.4 ? "Moderate" : "Low";
   return {
     trapRisk,

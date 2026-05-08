@@ -1,3 +1,4 @@
+import type { NormalizedSymbolInput } from "@/lib/intelligence/adapters/normalizeSymbolInput";
 import { runLongEngine } from "@/lib/intelligence/core/longEngine";
 import { runSwingEngine } from "@/lib/intelligence/core/swingEngine";
 import { buildCapitalDeployment } from "@/lib/intelligence/deployment/capitalDeployment";
@@ -5,9 +6,9 @@ import { runMacroModule } from "@/lib/intelligence/support/macroModule";
 import { runPoliticsModule } from "@/lib/intelligence/support/politicsModule";
 import { runSentimentModule } from "@/lib/intelligence/support/sentimentModule";
 import { runWhaleModule } from "@/lib/intelligence/support/whaleModule";
-import type { BattlefieldOutput, SymbolInput } from "@/lib/intelligence/types/battlefield";
+import type { BattlefieldOutput } from "@/lib/intelligence/types/battlefield";
 
-export function routeBattlefield(input: SymbolInput): BattlefieldOutput {
+export function routeBattlefield(input: NormalizedSymbolInput): BattlefieldOutput {
   console.log("[battlefieldRouter] input symbol:", input.symbol);
   const swing = runSwingEngine(input);
   const longTerm = runLongEngine(input);
