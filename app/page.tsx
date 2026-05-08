@@ -1,5 +1,5 @@
-import DashboardClientShell from "@/components/DashboardClientShell";
+import BattlefieldConsole from "@/components/layout/BattlefieldConsole";
 
 export default function Page() {
-  return <DashboardClientShell />;
+  return <BattlefieldConsole />;
 }

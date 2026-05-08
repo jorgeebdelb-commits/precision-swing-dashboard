@@ -1,13 +1,70 @@
-export type SwingBias = "Swing Buy" | "Swing Watch" | "Swing Avoid" | "Swing Put Opportunity" | "No Trade";
-export type LongBias = "Long Buy" | "Long Watch" | "Long Avoid" | "LEAP Candidate" | "Shares Preferred";
-export type MarketTerrain = "Stable Terrain" | "Risk-Off" | "Momentum Expansion" | "High Volatility" | "Unstable Ground" | "Choppy Market";
-export interface SymbolInput { symbol: string; price: number; support: number; resistance: number; lr50: number; lr100: number; vwap: number; rsi: number; atrPercent: number; volumeRatio: number; technicalScore: number; fundamentalsScore: number; macroScore: number; politicalScore: number; sentimentScore: number; flowScore: number; }
-export interface SwingEngineOutput { symbol: string; bias: SwingBias; confidence: number; momentumQuality: "Strong"|"Moderate"|"Weak"; entryZone: string; stopZone: string; target1: string; target2: string; breakoutQuality: "Clean"|"Questionable"|"Failed"|"None"; riskReward: string; executionNotes: string[]; }
-export interface LongEngineOutput { symbol: string; bias: LongBias; confidence: number; longTermQuality: "Strong"|"Moderate"|"Weak"; accumulationZone: string; expected3M: string; expected6M: string; expected1Y: string; leapSuitability: "High"|"Moderate"|"Low"; institutionalStrength: "Strong"|"Moderate"|"Weak"; fundamentalDrivers: string[]; }
-export interface WhaleModuleOutput { trapRisk: "High"|"Moderate"|"Low"; exhaustionRisk: "High"|"Moderate"|"Low"; distributionDetected: boolean; unusualFlow: "Call Heavy"|"Put Heavy"|"Balanced"|"None"; liquidityWarning: boolean; squeezePotential: "High"|"Moderate"|"Low"; interpretation: string; }
-export interface MacroModuleOutput { terrain: MarketTerrain; aggressivenessModifier: number; optionsRiskModifier: number; sectorPressure: "Tailwind"|"Neutral"|"Headwind"; volatilityState: "Expansion"|"Normal"|"Compression"; macroNotes: string[]; }
-export interface PoliticsModuleOutput { politicalRisk: "High"|"Moderate"|"Low"; regulatoryRisk: "High"|"Moderate"|"Low"; geopoliticalPressure: "High"|"Moderate"|"Low"; policyTailwind: boolean; interpretation: string; }
-export interface SentimentModuleOutput { sentimentState: "Positive"|"Neutral"|"Negative"|"Crowded"|"Hype Risk"; confirmationStrength: "Strong"|"Moderate"|"Weak"; crowdingRisk: "High"|"Moderate"|"Low"; interpretation: string; }
-export interface CapitalDeploymentOutput { bestDeployment: "Buy Shares"|"Buy Calls"|"Buy Puts"|"Buy LEAPS"|"Starter Position"|"Wait for Pullback"|"Watch Only"|"No Trade"; preferredInstrument: "Shares"|"Calls"|"Puts"|"LEAPS"|"None"; entryRange: string; stopRange: string; targetRange: string; expectedMove: string; estimatedReturn: string; riskReward: string; sizingAggressiveness: "Full Size"|"Half Size"|"Starter Only"|"Watch Only"|"Avoid"; deploymentReason: string; }
-export interface BattlefieldOutput { symbol: string; swing: SwingEngineOutput; longTerm: LongEngineOutput; whale: WhaleModuleOutput; macro: MacroModuleOutput; politics: PoliticsModuleOutput; sentiment: SentimentModuleOutput; battlefieldSummary: string; primaryOpportunity: "Swing"|"Long-Term"|"Both"|"Neither"; warnings: string[]; confidenceAdjustment: number; deployment: CapitalDeploymentOutput; }
-export interface BattlefieldApiResponse { items: BattlefieldOutput[]; generatedAt: string; source: "cache"|"fresh"; }
+export type Direction = "Swing Buy" | "Swing Watch" | "Swing Avoid" | "Swing Put Opportunity" | "No Trade";
+export type LongDirection = "Long Buy" | "Long Watch" | "Long Avoid" | "LEAP Candidate" | "Shares Preferred";
+
+export type SwingSignals = {
+  trend: number;
+  momentum: number;
+  volume: number;
+  rsi: number;
+  atr: number;
+  vwapDelta: number;
+  breakoutQuality: number;
+  rejectionRisk: number;
+};
+
+export type LongSignals = {
+  earnings: number;
+  revenue: number;
+  sectorStrength: number;
+  institutionalQuality: number;
+  catalysts: number;
+  valuation: number;
+  durability: number;
+  macroResilience: number;
+};
+
+export type SupportState = {
+  confidence: number;
+  status: "Stable" | "Caution" | "Danger";
+  notes: string[];
+};
+
+export type DeploymentPlan = {
+  mode: "Buy Shares" | "Buy Calls" | "Buy Puts" | "Buy LEAPS" | "Starter Position" | "Wait for Pullback" | "Watch Only" | "No Trade";
+  entryZone: string;
+  stopZone: string;
+  targets: string[];
+  expectedMove: string;
+  riskReward: string;
+  aggressiveness: number;
+};
+
+export type BattlefieldRecord = {
+  symbol: string;
+  price: number;
+  swingSignals: SwingSignals;
+  longSignals: LongSignals;
+  swingDirection: Direction;
+  longDirection: LongDirection;
+  whale: SupportState;
+  macro: SupportState;
+  politics: SupportState;
+  sentiment: SupportState;
+  deployment: DeploymentPlan;
+  alerts: string[];
+};
+
+export type SymbolInput = { symbol: string; [key: string]: number | string };
+export type BattlefieldApiResponse = {
+  items: Array<{ symbol: string; primaryOpportunity?: string; battlefieldSummary?: string; deployment: { bestDeployment?: string; vehicleScores?: { name: string; score: number }[] }; confidence?: number; riskLevel?: string; }>;
+  generatedAt: string;
+  source: string;
+};
+
+export type SwingEngineOutput = { bias: string; confidence: number; summary?: string };
+export type LongEngineOutput = { bias: string; confidence: number; summary?: string };
+export type WhaleModuleOutput = { status: string; confidence: number; notes: string[] };
+export type MacroModuleOutput = { status: string; confidence: number; notes: string[] };
+export type PoliticsModuleOutput = { status: string; confidence: number; notes: string[] };
+export type SentimentModuleOutput = { status: string; confidence: number; notes: string[] };
+export type CapitalDeploymentOutput = { bestDeployment: string; rationale?: string; vehicleScores?: { name: string; score: number }[] };
