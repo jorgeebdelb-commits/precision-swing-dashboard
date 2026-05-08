@@ -1763,7 +1763,7 @@ export default function DashboardClientShell() {
               />
             </div>
             {[
-              ["Price", `$${selectedItem.price.toFixed(2)}`, "#f8fafc"],
+              ["Price", `$${num(selectedItem.price).toFixed(2)}`, "#f8fafc"],
               [
                 "Action State",
                 selectedActionPlan?.state ?? "Setup",
@@ -1967,7 +1967,7 @@ export default function DashboardClientShell() {
             />
             <ul style={{ marginBottom: 0, color: "#cbd5e1" }}>
               <li>{selectedMetrics.reason}</li>
-              {selectedMetrics.notes.map((note, idx) => (
+              {(Array.isArray(selectedMetrics.notes) ? selectedMetrics.notes : []).map((note, idx) => (
                 <li key={idx}>{note}</li>
               ))}
             </ul>
