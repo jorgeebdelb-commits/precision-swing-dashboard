@@ -13,7 +13,11 @@ export async function GET(request: Request) {
       : await getWatchlistSymbols();
     const horizon = url.searchParams.get("horizon");
 
-    const result = await getIntelligence(symbols, false, horizon ?? undefined);
+    const result = await getIntelligence({
+      symbols,
+      force: false,
+      horizon: horizon ?? undefined,
+    });
 
     return NextResponse.json(result);
   } catch (error) {
