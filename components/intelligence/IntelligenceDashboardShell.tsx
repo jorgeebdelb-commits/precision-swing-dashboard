@@ -173,7 +173,7 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
 
   const trapRisk = selectedItem?.whale?.trapRisk ?? "Unknown";
   const hypeRisk = selectedItem?.sentiment?.sentimentState === "Hype Risk";
-  const swingAvoid = selectedItem?.swing?.momentumQuality === "Avoid";
+  const swingAvoid = selectedItem?.swing?.bias === "Swing Avoid";
   const primaryNeither = selectedItem?.primaryOpportunity === "Neither";
   const choppyMarket = selectedItem?.macro?.terrain === "Choppy Market";
   const longStrong = selectedItem?.longTerm?.longTermQuality === "Strong";
