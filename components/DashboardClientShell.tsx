@@ -39,6 +39,16 @@ type DecisionSignal = "Bullish" | "Bearish" | "Neutral";
 type Tradeability = "Full Size" | "Starter Size" | "Speculative" | "Avoid";
 type ActionState = "READY" | "SETUP" | "EXTENDED" | "BREAKDOWN" | "NO_TRADE";
 type ConfirmationLabel = "Confirmed" | "Pending" | "Weak";
+type DecisionState = "ACTIVE_LONG" | "POSITION_TRADE" | "ACCUMULATION" | "NO_TRADE";
+type PrimaryTradeResolution = {
+  primaryHorizon: EngineKey;
+  primaryVerdict: string;
+  bestStrategy: string;
+  decisionState: DecisionState;
+  overallRisk: RiskLabel;
+  reasoning: string;
+  confidence: number;
+};
 
 
 const HORIZON_OPTIONS: Array<{ key: EngineKey; label: string }> = [
@@ -180,14 +190,55 @@ function engineVerdict(metrics: RowMetrics, engine: EngineKey): string {
 }
 
 function engineRisk(metrics: RowMetrics, engine: EngineKey): RiskLabel {
-  const base = metrics.riskLabel === "Extreme" ? 4 : metrics.riskLabel === "High" ? 3 : metrics.riskLabel === "Medium" ? 2 : 1;
-  const horizonAdjust = engine === "swing" ? 1 : engine === "threeMonth" ? 0 : engine === "sixMonth" ? -0.2 : -0.35;
-  const scoreAdjust = (7 - engineScore(metrics, engine)) * 0.35;
-  const riskNumber = Math.max(1, Math.min(4, base + horizonAdjust + scoreAdjust));
-  if (riskNumber >= 3.6) return "Extreme";
-  if (riskNumber >= 2.8) return "High";
-  if (riskNumber >= 1.9) return "Medium";
+  const score100 = toDisplayScore(engineScore(metrics, engine));
+  const inverseScoreRisk = Math.max(0, 100 - score100);
+  const volatilityRisk = num(metrics.volatility, 0) * 10;
+  const riskNumber = Math.max(0, Math.min(100, inverseScoreRisk * 0.55 + volatilityRisk * 0.45));
+  if (riskNumber >= 86) return "Extreme";
+  if (riskNumber >= 71) return "High";
+  if (riskNumber >= 51) return "Medium";
   return "Low";
+}
+
+function resolvePrimaryTradeState(metrics: RowMetrics): PrimaryTradeResolution {
+  const horizons: Array<{ key: EngineKey; label: string; score: number; verdict: string; strategy: Strategy; risk: RiskLabel; confidence: number }> = [
+    { key: "swing", label: "Swing", score: toDisplayScore(metrics.swing), verdict: metrics.swingSignal, strategy: metrics.swingStrategy, risk: engineRisk(metrics, "swing"), confidence: Math.max(0, Math.min(100, toDisplayScore(metrics.swing) - 8)) },
+    { key: "threeMonth", label: "3M", score: toDisplayScore(metrics.threeMonth), verdict: metrics.threeMonthSignal, strategy: metrics.threeMonthStrategy, risk: engineRisk(metrics, "threeMonth"), confidence: Math.max(0, Math.min(100, toDisplayScore(metrics.threeMonth) + 4)) },
+    { key: "sixMonth", label: "6M", score: toDisplayScore(metrics.sixMonth), verdict: metrics.sixMonthSignal, strategy: metrics.sixMonthStrategy, risk: engineRisk(metrics, "sixMonth"), confidence: Math.max(0, Math.min(100, toDisplayScore(metrics.sixMonth) + 6)) },
+    { key: "oneYear", label: "1Y", score: toDisplayScore(metrics.oneYear), verdict: metrics.oneYearSignal, strategy: metrics.oneYearStrategy, risk: engineRisk(metrics, "oneYear"), confidence: Math.max(0, Math.min(100, toDisplayScore(metrics.oneYear) + 8)) },
+  ];
+  const valid = horizons.filter((h) => h.score >= 40);
+  if (!valid.length) {
+    return { primaryHorizon: "swing", primaryVerdict: metrics.swingSignal, bestStrategy: "No Trade", decisionState: "NO_TRADE", overallRisk: "Extreme", reasoning: "All horizons scored below minimum threshold.", confidence: 0 };
+  }
+  const riskRank = (risk: RiskLabel) => (risk === "Low" ? 0 : risk === "Medium" ? 1 : risk === "High" ? 2 : 3);
+  valid.sort((a, b) => (b.confidence - riskRank(b.risk) * 5) - (a.confidence - riskRank(a.risk) * 5));
+  const primary = valid[0];
+  const allBearish = horizons.every((h) => h.verdict === "Avoid" || h.verdict === "Strong Avoid" || h.score < 50);
+  const bullishCount = horizons.filter((h) => h.verdict === "Buy" || h.verdict === "Strong Buy").length;
+  const decisionState: DecisionState = allBearish
+    ? "NO_TRADE"
+    : primary.key === "swing" && bullishCount >= 2
+    ? "ACTIVE_LONG"
+    : primary.key === "threeMonth"
+    ? "POSITION_TRADE"
+    : primary.key === "sixMonth" || primary.key === "oneYear"
+    ? "ACCUMULATION"
+    : "POSITION_TRADE";
+  const bestStrategy =
+    primary.key === "swing" ? "Swing Trade"
+      : primary.key === "threeMonth" ? "3M Position Trade"
+      : primary.key === "sixMonth" ? "6M Accumulation"
+      : "1Y LEAPS Accumulation";
+  return {
+    primaryHorizon: primary.key,
+    primaryVerdict: primary.verdict,
+    bestStrategy,
+    decisionState,
+    overallRisk: primary.risk,
+    reasoning: `Primary horizon ${primary.label} selected: score ${primary.score}, verdict ${primary.verdict}, risk ${primary.risk}.`,
+    confidence: primary.confidence,
+  };
 }
 
 function strategyForEngine(metrics: RowMetrics, engine: EngineKey): Strategy {
@@ -444,17 +495,6 @@ function buildActionablePlan(item: Item, metrics: RowMetrics, engine: EngineKey)
   };
 }
 
-function bestStrategy(metrics: RowMetrics): Strategy {
-  const ranked: Array<{ engine: EngineKey; score: number; strategy: Strategy }> = [
-    { engine: "swing", score: metrics.swing, strategy: metrics.swingStrategy },
-    { engine: "threeMonth", score: metrics.threeMonth, strategy: metrics.threeMonthStrategy },
-    { engine: "sixMonth", score: metrics.sixMonth, strategy: metrics.sixMonthStrategy },
-    { engine: "oneYear", score: metrics.oneYear, strategy: metrics.oneYearStrategy },
-  ];
-  ranked.sort((a, b) => b.score - a.score);
-  return ranked[0]?.strategy ?? metrics.strategy;
-}
-
 const WATCHLIST_CACHE_KEY = "precision-dashboard-watchlist-cache";
 const SELECTED_SYMBOL_KEY = "precision-dashboard-selected-symbol";
 
@@ -656,8 +696,10 @@ export default function DashboardClientShell() {
 
   const selectedItem = selectedRow?.item ?? null;
   const selectedMetrics = selectedRow?.metrics ?? null;
-  const selectedDecision = selectedMetrics ? buildDecision(selectedMetrics, watchlistHorizon) : null;
-  const selectedActionPlan = selectedItem && selectedMetrics ? buildActionablePlan(selectedItem, selectedMetrics, watchlistHorizon) : null;
+  const selectedPrimary = selectedMetrics ? resolvePrimaryTradeState(selectedMetrics) : null;
+  const selectedPrimaryHorizon = selectedPrimary?.primaryHorizon ?? watchlistHorizon;
+  const selectedDecision = selectedMetrics ? buildDecision(selectedMetrics, selectedPrimaryHorizon) : null;
+  const selectedActionPlan = selectedItem && selectedMetrics ? buildActionablePlan(selectedItem, selectedMetrics, selectedPrimaryHorizon) : null;
   const momentumLabel = selectedMetrics ? toMomentumLabel(selectedMetrics.momentumToday) : "Neutral";
   const momentumColor =
     momentumLabel === "Bullish" ? "#22c55e" : momentumLabel === "Bearish" ? "#ef4444" : "#f59e0b";
@@ -768,11 +810,11 @@ export default function DashboardClientShell() {
       selectedTicker: selectedItem,
       selectedAnalysis: selectedMetrics,
       capitalToDeploy,
-      horizon: horizonMap[watchlistHorizon],
+      horizon: horizonMap[selectedPrimaryHorizon],
       riskStyle: deploymentRiskStyle,
       strategyType: deploymentStrategyType,
     });
-  }, [capitalToDeployInput, deploymentRiskStyle, deploymentStrategyType, selectedItem, selectedMetrics, watchlistHorizon]);
+  }, [capitalToDeployInput, deploymentRiskStyle, deploymentStrategyType, selectedItem, selectedMetrics, selectedPrimaryHorizon]);
 
   const handleLogin = () => {
     if (!sitePassword) {
@@ -1333,6 +1375,12 @@ export default function DashboardClientShell() {
         </div>
         {spotlightRows.length ? (
           spotlightRows.map(({ item, metrics }, index) => (
+            (() => {
+              const primary = resolvePrimaryTradeState(metrics);
+              const selectedLabel = HORIZON_OPTIONS.find((x) => x.key === watchlistHorizon)?.label ?? "Selected";
+              const selectedScore = toDisplayScore(engineScore(metrics, watchlistHorizon));
+              const selectedVerdict = engineVerdict(metrics, watchlistHorizon);
+              return (
             <div
               key={item.symbol}
               onClick={() => setSelectedSymbol(item.symbol)}
@@ -1369,26 +1417,31 @@ export default function DashboardClientShell() {
                 <div
                   style={{
                     fontSize: 13,
-                    color: signalColor(engineVerdict(metrics, watchlistHorizon)),
+                    color: signalColor(selectedVerdict),
                     fontWeight: 800,
                   }}
                 >
-                  {HORIZON_OPTIONS.find((x) => x.key === watchlistHorizon)?.label} {toDisplayScore(engineScore(metrics, watchlistHorizon))}
+                  {selectedLabel} {selectedScore}
                 </div>
               </div>
               <div
                 style={{
                   marginTop: 8,
                   fontWeight: 800,
-                  color: signalColor(metrics.swingSignal),
+                  color: signalColor(primary.primaryVerdict),
                 }}
               >
-                {metrics.swingSignal}
+                Primary Horizon: {primary.primaryHorizon === "threeMonth" ? "3M" : primary.primaryHorizon === "sixMonth" ? "6M" : primary.primaryHorizon === "oneYear" ? "1Y" : "Swing"}
               </div>
               <div style={{ marginTop: 8, fontSize: 13, color: "#cbd5e1" }}>
-                {metrics.swingStrategy} • Entry {metrics.entryZone}
+                {primary.primaryHorizon === "swing" ? `Swing ${metrics.swingSignal}` : primary.primaryHorizon === "threeMonth" ? `3M ${metrics.threeMonthSignal}` : primary.primaryHorizon === "sixMonth" ? `6M ${metrics.sixMonthSignal}` : `1Y ${metrics.oneYearSignal}`} • {selectedScore}
+              </div>
+              <div style={{ marginTop: 6, fontSize: 12, color: "#94a3b8" }}>
+                Secondary: Swing {metrics.swingSignal}
               </div>
             </div>
+              );
+            })()
           ))
         ) : (
           <div
@@ -1785,7 +1838,7 @@ export default function DashboardClientShell() {
               </label>
               <label style={{ fontSize: 12, color: "#94a3b8" }}>
                 Horizon Focus
-                <input value={watchlistHorizon === "swing" ? "Swing" : watchlistHorizon === "threeMonth" ? "3 Month" : watchlistHorizon === "sixMonth" ? "6 Month" : "1 Year"} readOnly style={{ marginTop: 6, width: "100%", padding: 10, borderRadius: 10, border: "1px solid rgba(148,163,184,0.2)", background: "#0b1220", color: "#f8fafc" }} />
+                <input value={selectedPrimaryHorizon === "swing" ? "Swing" : selectedPrimaryHorizon === "threeMonth" ? "3 Month" : selectedPrimaryHorizon === "sixMonth" ? "6 Month" : "1 Year"} readOnly style={{ marginTop: 6, width: "100%", padding: 10, borderRadius: 10, border: "1px solid rgba(148,163,184,0.2)", background: "#0b1220", color: "#f8fafc" }} />
               </label>
             </div>
 
@@ -1958,7 +2011,7 @@ export default function DashboardClientShell() {
               </thead>
               <tbody>
                 {sortedRows.map(({ item, metrics }) => {
-              const decision = buildDecision(metrics, watchlistHorizon);
+              const primary = resolvePrimaryTradeState(metrics);
               const actionPlan = buildActionablePlan(item, metrics, watchlistHorizon);
               return (
               <tr
@@ -2006,10 +2059,10 @@ export default function DashboardClientShell() {
                   {toDisplayScore(metrics.oneYear)} • <span style={{ color: signalColor(metrics.oneYearSignal) }}>{metrics.oneYearSignal}</span>
                 </td>
                 <td style={{ padding: 9, textAlign: "center", fontWeight: 800 }}>
-                  {bestStrategy(metrics)}
+                  {primary.bestStrategy}
                 </td>
-                <td style={{ padding: 9, textAlign: "center", fontWeight: 800, color: actionPlan.color }}>{actionPlan.state}</td>
-                <td style={{ padding: 9, textAlign: "center", fontWeight: 800, color: riskColor(decision.risk) }}>{decision.risk}</td>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 800, color: actionStateColor(primary.decisionState === "NO_TRADE" ? "NO_TRADE" : "SETUP") }}>{primary.decisionState}</td>
+                <td style={{ padding: 9, textAlign: "center", fontWeight: 800, color: riskColor(primary.overallRisk) }}>{primary.overallRisk}</td>
                 <td style={{ padding: 9, textAlign: "left", fontSize: 12, minWidth: 220 }}>
                   {`${actionPlan.trigger.type} @ ${actionPlan.trigger.level} | ${actionPlan.trigger.confirmation} | invalidation ${actionPlan.trigger.invalidation}`}
                 </td>
