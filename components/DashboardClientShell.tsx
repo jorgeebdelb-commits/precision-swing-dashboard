@@ -560,8 +560,12 @@ function strategyToBias(strategy: Strategy): Item["bias"] {
 }
 
 function mergeWatchlistWithIntelligence(baseRows: Record<string, unknown>[], intelligence: IntelligenceApiResponse): Item[] {
+  console.log("[dashboard] mergeWatchlistWithIntelligence input:", {
+    watchlistSymbols: baseRows.map((row) => (typeof row.symbol === "string" ? row.symbol : "")).filter(Boolean),
+    intelligenceItems: Array.isArray(intelligence?.items) ? intelligence.items.length : 0,
+  });
   const runtimeBySymbol = new Map(
-    intelligence.items.map((summary) => {
+    (Array.isArray(intelligence?.items) ? intelligence.items : []).map((summary) => {
       const runtime = mapIntelligenceSummaryToRuntime(summary);
       return [
         summary.symbol,
@@ -667,16 +671,22 @@ export default function DashboardClientShell() {
         const symbols = dbRows
           .map((row) => (typeof row.symbol === "string" ? row.symbol : ""))
           .filter(Boolean);
+        console.log("[dashboard] symbols from watchlist rows:", symbols);
         let mapped: Item[] = dbRows.map((row) => mapWatchlistRowToItem(row as Record<string, unknown>)).filter((item) => item.symbol);
 
         if (symbols.length) {
           const intelligenceRes = await fetch(`/api/intelligence?symbols=${encodeURIComponent(symbols.join(","))}`);
           if (intelligenceRes.ok) {
             const intelligence = (await intelligenceRes.json()) as IntelligenceApiResponse;
-            mapped = mergeWatchlistWithIntelligence(dbRows as Record<string, unknown>[], intelligence);
+            try {
+              mapped = mergeWatchlistWithIntelligence(dbRows as Record<string, unknown>[], intelligence);
+            } catch (error) {
+              console.warn("[dashboard] intelligence merge failed, falling back to raw symbols:", error);
+            }
           }
         }
 
+        console.log("[dashboard] final rows passed to UI:", mapped.map((item) => item.symbol));
         setItems(mapped);
         setSelectedSymbol(pickDefaultSymbol(mapped, persistedSymbol));
         localStorage.setItem(WATCHLIST_CACHE_KEY, JSON.stringify(mapped));
@@ -1258,6 +1268,35 @@ export default function DashboardClientShell() {
   }
 
   if (!selectedItem || !selectedMetrics) {
+    const fallbackSymbols = items.map((item) => item.symbol).filter(Boolean);
+    console.log("[dashboard] render fallback condition:", {
+      itemCount: items.length,
+      selectedSymbol,
+      hasSelectedItem: Boolean(selectedItem),
+      hasSelectedMetrics: Boolean(selectedMetrics),
+      fallbackSymbols,
+    });
+    if (fallbackSymbols.length) {
+      return (
+        <div
+          style={{
+            minHeight: "100vh",
+            background: "#020617",
+            color: "#e2e8f0",
+            fontFamily: "Arial, sans-serif",
+            padding: 24,
+          }}
+        >
+          <h2 style={{ marginTop: 0 }}>Battlefield data is partial — showing symbols fallback.</h2>
+          <p style={{ color: "#94a3b8" }}>Watchlist symbols are available even if advanced modules fail.</p>
+          <ul>
+            {fallbackSymbols.map((symbol) => (
+              <li key={symbol}>{symbol}</li>
+            ))}
+          </ul>
+        </div>
+      );
+    }
     return (
       <div
         style={{

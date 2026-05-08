@@ -104,6 +104,34 @@ export function mapItemToWatchlistPersistedRow(row: Item): WatchlistInsert {
 }
 
 export function mapIntelligenceSummaryToRuntime(summary: IntelligenceSymbolSummary): WatchlistRuntimeIntelligence {
+  const maybeBattlefield = summary as unknown as {
+    symbol?: string;
+    swing?: { confidence?: number };
+    longTerm?: { confidence?: number };
+    macro?: { aggressivenessModifier?: number };
+    whale?: { trapRisk?: "Low" | "Moderate" | "High" };
+    sentiment?: { crowdingRisk?: "Low" | "Moderate" | "High" };
+  };
+
+  if (!Array.isArray(summary.analyses)) {
+    const whaleTrap = maybeBattlefield.whale?.trapRisk;
+    const sentimentCrowding = maybeBattlefield.sentiment?.crowdingRisk;
+    const whaleScore = whaleTrap === "Low" ? 85 : whaleTrap === "Moderate" ? 65 : whaleTrap === "High" ? 45 : undefined;
+    const sentimentScore = sentimentCrowding === "Low" ? 80 : sentimentCrowding === "Moderate" ? 65 : sentimentCrowding === "High" ? 45 : undefined;
+    return {
+      swingScore: maybeBattlefield.swing?.confidence,
+      threeMonthScore: maybeBattlefield.longTerm?.confidence,
+      sixMonthScore: maybeBattlefield.longTerm?.confidence,
+      oneYearScore: maybeBattlefield.longTerm?.confidence,
+      macroScore: maybeBattlefield.macro?.aggressivenessModifier
+        ? Math.max(20, Math.min(90, maybeBattlefield.macro.aggressivenessModifier * 100))
+        : undefined,
+      whaleScore,
+      politicalScore: undefined,
+      momentum: sentimentScore,
+    };
+  }
+
   const swing = summary.analyses.find((analysis) => analysis.horizon === "swing");
   const threeMonth = summary.analyses.find((analysis) => analysis.horizon === "threeMonth");
   const sixMonth = summary.analyses.find((analysis) => analysis.horizon === "sixMonth");
