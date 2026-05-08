@@ -6,7 +6,9 @@ import type { BattlefieldApiResponse, SymbolInput } from "@/lib/intelligence/typ
 export async function getWatchlistSymbols(): Promise<string[]> {
   const supabase = getSupabaseServerClient();
   const { data } = await supabase.from(WATCHLIST_TABLE).select("symbol").order("created_at", { ascending: true });
-  return (data ?? []).map((row: { symbol: string }) => row.symbol).filter(Boolean);
+  const symbols = (data ?? []).map((row: { symbol: string }) => row.symbol).filter(Boolean);
+  console.log("[watchlist] symbols from db:", symbols);
+  return symbols;
 }
 
 function buildInput(symbol: string): SymbolInput {
@@ -42,8 +44,18 @@ export interface GetIntelligenceConfig {
 }
 
 export async function getIntelligence({ symbols }: GetIntelligenceConfig): Promise<BattlefieldApiResponse> {
+  console.log("[intelligence] symbols entering getIntelligence:", symbols);
+  const items = symbols.map((symbol) => routeBattlefield(buildInput(symbol.toUpperCase())));
+  console.log(
+    "[intelligence] battlefield results:",
+    items.map((item) => ({
+      symbol: item.symbol,
+      primaryOpportunity: item.primaryOpportunity,
+      deployment: item.deployment.bestDeployment,
+    }))
+  );
   return {
-    items: symbols.map((symbol) => routeBattlefield(buildInput(symbol.toUpperCase()))),
+    items,
     generatedAt: new Date().toISOString(),
     source: "fresh",
   };
