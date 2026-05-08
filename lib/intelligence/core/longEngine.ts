@@ -1,6 +1,7 @@
-import type { LongEngineOutput, SymbolInput } from "@/lib/intelligence/types/battlefield";
+import type { LongEngineOutput } from "@/lib/intelligence/types/battlefield";
+import type { NormalizedSymbolInput } from "@/lib/intelligence/adapters/normalizeSymbolInput";
 
-export function runLongEngine(input: SymbolInput): LongEngineOutput {
+export function runLongEngine(input: NormalizedSymbolInput): LongEngineOutput {
   const quality = input.fundamentalsScore >= 7.2 ? "Strong" : input.fundamentalsScore >= 5.6 ? "Moderate" : "Weak";
   let bias: LongEngineOutput["bias"] = "Long Watch";
   if (quality === "Strong") bias = input.macroScore >= 6 ? "Long Buy" : "Shares Preferred";

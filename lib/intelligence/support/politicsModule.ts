@@ -1,6 +1,7 @@
-import type { PoliticsModuleOutput, SymbolInput } from "@/lib/intelligence/types/battlefield";
+import type { PoliticsModuleOutput } from "@/lib/intelligence/types/battlefield";
+import type { NormalizedSymbolInput } from "@/lib/intelligence/adapters/normalizeSymbolInput";
 
-export function runPoliticsModule(input: SymbolInput): PoliticsModuleOutput {
+export function runPoliticsModule(input: NormalizedSymbolInput): PoliticsModuleOutput {
   const risk = input.politicalScore <= 4.5 ? "High" : input.politicalScore < 6.2 ? "Moderate" : "Low";
   return { politicalRisk: risk, regulatoryRisk: risk, geopoliticalPressure: risk, policyTailwind: input.politicalScore >= 6.8, interpretation: risk === "High" ? "Heightened policy uncertainty requires tighter risk controls." : "External policy backdrop is manageable." };
 }

@@ -1,6 +1,7 @@
-import type { SwingEngineOutput, SymbolInput } from "@/lib/intelligence/types/battlefield";
+import type { SwingEngineOutput } from "@/lib/intelligence/types/battlefield";
+import type { NormalizedSymbolInput } from "@/lib/intelligence/adapters/normalizeSymbolInput";
 
-export function runSwingEngine(input: SymbolInput): SwingEngineOutput {
+export function runSwingEngine(input: NormalizedSymbolInput): SwingEngineOutput {
   const trendUp = input.lr50 > input.lr100 && input.price >= input.vwap;
   const momentumStrong = input.rsi >= 58 && input.volumeRatio >= 1.2;
   const breakoutQuality = input.price > input.resistance && input.volumeRatio >= 1.3 ? "Clean" : input.price > input.resistance ? "Questionable" : input.price < input.support ? "Failed" : "None";

@@ -1,7 +1,8 @@
+import { normalizeSymbolInput, type NormalizedSymbolInput } from "@/lib/intelligence/adapters/normalizeSymbolInput";
+import { routeBattlefield } from "@/lib/intelligence/router/battlefieldRouter";
+import type { BattlefieldApiResponse } from "@/lib/intelligence/types/battlefield";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { WATCHLIST_TABLE } from "@/lib/watchlist/schema";
-import { routeBattlefield } from "@/lib/intelligence/router/battlefieldRouter";
-import type { BattlefieldApiResponse, SymbolInput } from "@/lib/intelligence/types/battlefield";
 
 export async function getWatchlistSymbols(): Promise<string[]> {
   const supabase = getSupabaseServerClient();
@@ -11,17 +12,16 @@ export async function getWatchlistSymbols(): Promise<string[]> {
   return symbols;
 }
 
-function buildInput(symbol: string): SymbolInput {
+function buildInput(symbol: string): NormalizedSymbolInput {
   const seed = symbol.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
   const base = 80 + (seed % 120);
-  const support = base * 0.95;
-  const resistance = base * 1.05;
   const technicalScore = 4.5 + (seed % 40) / 10;
-  return {
+
+  return normalizeSymbolInput({
     symbol,
     price: base,
-    support,
-    resistance,
+    support: base * 0.95,
+    resistance: base * 1.05,
     lr50: base * (1 + ((seed % 9) - 4) / 100),
     lr100: base,
     vwap: base * 0.995,
@@ -34,7 +34,7 @@ function buildInput(symbol: string): SymbolInput {
     politicalScore: 4 + (seed % 35) / 10,
     sentimentScore: 4 + (seed % 50) / 10,
     flowScore: 4 + (seed % 45) / 10,
-  };
+  });
 }
 
 export interface GetIntelligenceConfig {
