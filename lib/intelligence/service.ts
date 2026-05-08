@@ -35,7 +35,13 @@ function buildInput(symbol: string): SymbolInput {
   };
 }
 
-export async function getIntelligence(symbols: string[]): Promise<BattlefieldApiResponse> {
+export interface GetIntelligenceConfig {
+  symbols: string[];
+  force?: boolean;
+  horizon?: string;
+}
+
+export async function getIntelligence({ symbols }: GetIntelligenceConfig): Promise<BattlefieldApiResponse> {
   return {
     items: symbols.map((symbol) => routeBattlefield(buildInput(symbol.toUpperCase()))),
     generatedAt: new Date().toISOString(),
