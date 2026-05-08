@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 export default async function IntelligencePage() {
   const symbols = await getWatchlistSymbols();
-  const initialData = await getIntelligence(symbols, false);
+  const initialData = await getIntelligence(symbols);
 
   return <IntelligenceDashboardShell initialData={initialData} />;
 }
