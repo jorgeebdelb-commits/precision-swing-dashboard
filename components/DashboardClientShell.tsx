@@ -38,6 +38,7 @@ export default function DashboardClientShell() {
 
   const normalizedRows = useMemo(() => normalizeBattlefieldRows(rawApi), [rawApi]);
   const symbols = useMemo(() => (Array.isArray(normalizedRows) ? normalizedRows.map((row) => row?.symbol ?? "UNKNOWN") : []), [normalizedRows]);
+  const symbolsCount = normalizedRows.length;
 
   return (
     <main style={{ padding: 20, color: "#e2e8f0", background: "#020617", minHeight: "100vh" }}>
@@ -60,7 +61,7 @@ export default function DashboardClientShell() {
       <ErrorBoundary onError={(e) => setModuleFailures((prev) => [...prev, `debug panel error: ${e.message}`])}>
         <section style={{ border: "1px solid #334155", borderRadius: 10, padding: 12 }}>
           <h2>Debug Panel</h2>
-          <p>symbols count: {Array.isArray(symbols) ? symbols.length : 0}</p>
+          <p>symbols count: {symbolsCount}</p>
           <p>normalized rows count: {Array.isArray(normalizedRows) ? normalizedRows.length : 0}</p>
           <p>raw API response shape: {getRawShape(rawApi)}</p>
           <p>selected symbol: {selectedSymbol || "(none)"}</p>
