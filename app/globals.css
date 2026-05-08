@@ -126,8 +126,18 @@ body {
 .add-symbol input, .watchlist-search { width: 100%; background: rgba(2, 6, 23, 0.5); border: 1px solid rgba(148, 163, 184, 0.25); color: #e2e8f0; border-radius: 8px; padding: 0.4rem 0.5rem; font-size: 0.8rem; }
 .watchlist-search { margin-bottom: 0.5rem; }
 .watchlist-rows { display: grid; gap: 0.35rem; max-height: 72vh; overflow: auto; }
-.watch-row { width: 100%; border: 1px solid rgba(148, 163, 184, 0.2); background: rgba(2, 6, 23, 0.35); color: #e2e8f0; border-radius: 10px; padding: 0.5rem; display: grid; grid-template-columns: 1fr auto auto; gap: 0.4rem; text-align: left; font-size: 0.8rem; align-items: center; }
+.watch-row { width: 100%; border: 1px solid rgba(148, 163, 184, 0.2); background: rgba(2, 6, 23, 0.35); color: #e2e8f0; border-radius: 10px; padding: 0.45rem 0.5rem; display: grid; grid-template-columns: 1fr auto; gap: 0.25rem; text-align: left; font-size: 0.8rem; align-items: center; transition: border-color 160ms ease, box-shadow 160ms ease; }
 .watch-row.selected { border-color: rgba(14, 165, 233, 0.7); box-shadow: 0 0 0 1px rgba(14, 165, 233, 0.35) inset; }
+.watch-row:hover { border-color: rgba(56, 189, 248, 0.65); box-shadow: 0 0 14px rgba(56, 189, 248, 0.15); }
+.watch-row-select { display: grid; grid-template-columns: 1fr auto auto; gap: 0.4rem; width: 100%; align-items: center; background: transparent; border: none; color: inherit; text-align: left; padding: 0; font: inherit; }
+.watch-row-action { display: flex; justify-content: flex-end; }
+.watch-row-remove { background: transparent; border: none; color: #64748b; opacity: 0; cursor: pointer; font-size: 0.92rem; line-height: 1; width: 1.25rem; height: 1.25rem; border-radius: 999px; transition: color 120ms ease, opacity 120ms ease, background-color 120ms ease; }
+.watch-row:hover .watch-row-remove, .watch-row-remove:focus-visible, .watch-row-remove:disabled { opacity: 1; }
+.watch-row-remove:hover:not(:disabled), .watch-row-remove:focus-visible { color: #fda4af; background: rgba(239, 68, 68, 0.16); outline: none; }
+.watch-row-remove:disabled { color: #94a3b8; cursor: wait; }
+.watchlist-empty { border: 1px dashed rgba(148, 163, 184, 0.35); border-radius: 10px; padding: 0.8rem 0.7rem; background: rgba(2, 6, 23, 0.2); }
+.watchlist-empty h3 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; color: #cbd5e1; }
+.watchlist-empty p { margin-top: 0.35rem; color: #94a3b8; font-size: 0.76rem; }
 .class-swing { color: #22d3ee; }
 .class-long { color: #86efac; }
 .class-both { color: #fcd34d; }

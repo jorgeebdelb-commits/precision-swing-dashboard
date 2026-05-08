@@ -73,6 +73,7 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
   const [error, setError] = useState<string | null>(null);
   const [capitalInput, setCapitalInput] = useState("5000");
   const [refreshStamp, setRefreshStamp] = useState(new Date().toISOString());
+  const [removingSymbols, setRemovingSymbols] = useState<Record<string, boolean>>({});
 
   const refreshSymbol = useCallback(async (symbol: string, force = true) => {
     const target = symbol.trim().toUpperCase();
@@ -141,6 +142,41 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
     setAddInput("");
     await refreshSymbol(symbol, true);
   }, [addInput, refreshSymbol, watchlistSymbols]);
+
+  const removeSymbol = useCallback(async (symbol: string) => {
+    if (removingSymbols[symbol]) return;
+
+    const nextSymbols = watchlistSymbols.filter((entry) => entry !== symbol);
+    const selectedIndex = watchlistSymbols.indexOf(symbol);
+    const fallbackSymbol = selectedSymbol === symbol
+      ? nextSymbols[selectedIndex] ?? nextSymbols[selectedIndex - 1] ?? ""
+      : selectedSymbol;
+
+    setWatchlistSymbols(nextSymbols);
+    setItemsBySymbol((prev) => {
+      if (!(symbol in prev)) return prev;
+      const rest = { ...prev };
+      delete rest[symbol];
+      return rest;
+    });
+    setSelectedSymbol(fallbackSymbol);
+    setRemovingSymbols((prev) => ({ ...prev, [symbol]: true }));
+
+    try {
+      const response = await fetch(`/api/watchlist?symbol=${encodeURIComponent(symbol)}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("Failed to remove symbol from watchlist.");
+    } catch (removeError) {
+      setError(removeError instanceof Error ? removeError.message : "Failed to remove symbol from watchlist.");
+      setWatchlistSymbols(watchlistSymbols);
+      setSelectedSymbol(selectedSymbol);
+    } finally {
+      setRemovingSymbols((prev) => {
+        const rest = { ...prev };
+        delete rest[symbol];
+        return rest;
+      });
+    }
+  }, [removingSymbols, selectedSymbol, watchlistSymbols]);
 
   const swingPct = toPercent(selectedItem?.swing?.confidence);
   const longPct = toPercent(selectedItem?.longTerm?.confidence);
@@ -267,14 +303,34 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
             />
 
             <div className="watchlist-rows">
+              {filteredSymbols.length === 0 ? (
+                <div className="watchlist-empty">
+                  <h3>Watchlist Empty</h3>
+                  <p>Add symbols to begin battlefield analysis.</p>
+                </div>
+              ) : null}
               {filteredSymbols.map((symbol) => {
                 const item = itemsBySymbol[symbol];
+                const isRemoving = Boolean(removingSymbols[symbol]);
                 return (
-                  <button key={symbol} type="button" className={`watch-row ${selectedSymbol === symbol ? "selected" : ""}`} onClick={() => onSelectSymbol(symbol)}>
+                  <div key={symbol} className={`watch-row ${selectedSymbol === symbol ? "selected" : ""}`}>
+                    <button type="button" className="watch-row-select" onClick={() => onSelectSymbol(symbol)}>
                     <span>{symbol}</span>
                     <span>{typeof item?.price === "number" ? item.price.toFixed(2) : "-"}</span>
                     <span className={item ? classificationClass(item.primaryOpportunity) : "class-neither"}>{item?.primaryOpportunity ?? "Neither"}</span>
-                  </button>
+                    </button>
+                    <span className="watch-row-action">
+                      <button
+                        type="button"
+                        className="watch-row-remove"
+                        onClick={() => void removeSymbol(symbol)}
+                        aria-label={`Remove ${symbol} from watchlist`}
+                        disabled={isRemoving}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  </div>
                 );
               })}
             </div>
