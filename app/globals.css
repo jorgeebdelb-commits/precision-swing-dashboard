@@ -66,6 +66,7 @@ body {
 }
 
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.75rem; }
+.grid-ops { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; align-items: stretch; }
 .glass-card {
   background: rgba(15, 23, 42, 0.4);
   border: 1px solid rgba(148, 163, 184, 0.2);
@@ -74,8 +75,14 @@ body {
   backdrop-filter: blur(14px);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
-.glass-card h3 { font-size: 0.92rem; text-transform: uppercase; letter-spacing: 0.06em; color: #93c5fd; margin-bottom: 0.65rem; }
+.glass-card h3 { font-size: 0.92rem; text-transform: uppercase; letter-spacing: 0.06em; color: #93c5fd; margin-bottom: 0.65rem; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
 .glass-card.wide { grid-column: span 2; }
+.card-swing { grid-column: 1; grid-row: 1; min-height: 260px; }
+.card-whale { grid-column: 2; grid-row: 1; min-height: 260px; }
+.card-long { grid-column: 1; grid-row: 2; min-height: 260px; }
+.card-macro { grid-column: 2; grid-row: 2; min-height: 260px; }
+.card-deploy { grid-column: 1; grid-row: 3; }
+.card-capital { grid-column: 2; grid-row: 3; }
 
 .metric-row { display: flex; justify-content: space-between; gap: 0.6rem; font-size: 0.86rem; margin-top: 0.35rem; }
 .metric-row span { color: #cbd5e1; }
@@ -126,4 +133,15 @@ body {
 .class-both { color: #fcd34d; }
 .class-neither { color: #94a3b8; }
 .battlefield-main { min-width: 0; }
+.market-banner { margin-top: 0.65rem; border-radius: 10px; border: 1px solid rgba(148, 163, 184, 0.25); padding: 0.45rem 0.6rem; display: grid; gap: 0.2rem; background: rgba(15, 23, 42, 0.45); }
+.market-banner strong { font-size: 0.84rem; }
+.market-banner span, .market-banner em { font-size: 0.75rem; color: #cbd5e1; font-style: normal; }
+.market-open { border-color: rgba(34, 197, 94, 0.45); }
+.market-pre { border-color: rgba(234, 179, 8, 0.45); }
+.market-after, .market-weekend { border-color: rgba(148, 163, 184, 0.35); }
+.capital-input { width: 120px; background: rgba(2, 6, 23, 0.5); border: 1px solid rgba(148, 163, 184, 0.25); color: #e2e8f0; border-radius: 8px; padding: 0.3rem 0.45rem; font-size: 0.8rem; text-align: right; }
 @media (max-width: 1100px) { .intel-layout { grid-template-columns: 1fr; } .watchlist-panel { position: static; } }
+@media (max-width: 900px) {
+  .grid-ops { grid-template-columns: 1fr; }
+  .card-swing, .card-whale, .card-long, .card-macro, .card-deploy, .card-capital { grid-column: auto; grid-row: auto; min-height: auto; }
+}
