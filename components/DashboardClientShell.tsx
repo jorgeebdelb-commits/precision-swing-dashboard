@@ -191,9 +191,35 @@ function engineVerdict(metrics: RowMetrics, engine: EngineKey): string {
 
 function engineRisk(metrics: RowMetrics, engine: EngineKey): RiskLabel {
   const score100 = toDisplayScore(engineScore(metrics, engine));
-  const inverseScoreRisk = Math.max(0, 100 - score100);
-  const volatilityRisk = num(metrics.volatility, 0) * 10;
-  const riskNumber = Math.max(0, Math.min(100, inverseScoreRisk * 0.55 + volatilityRisk * 0.45));
+  const swingEngineRisk = Math.max(0, 100 - score100);
+  const macroTerrainRisk = Math.max(0, Math.min(100, num(metrics.environment) * 10));
+  const whaleTrapRisk = Math.max(0, Math.min(100, num(metrics.whaleV2) * 10));
+  const sentimentCrowdingRisk = Math.max(0, Math.min(100, 100 - num(metrics.intelligence) * 10));
+  const strategy = strategyForEngine(metrics, engine);
+  const deploymentAggressivenessRisk =
+    strategy === "Buy Calls" || strategy === "Buy Shares + Calls"
+      ? 72
+      : strategy === "Spec Buy"
+      ? 64
+      : strategy === "Starter Shares"
+      ? 52
+      : strategy === "Buy Shares"
+      ? 45
+      : strategy === "Avoid"
+      ? 86
+      : 60;
+
+  const riskNumber = Math.max(
+    0,
+    Math.min(
+      100,
+      swingEngineRisk * 0.3 +
+        macroTerrainRisk * 0.2 +
+        whaleTrapRisk * 0.2 +
+        sentimentCrowdingRisk * 0.15 +
+        deploymentAggressivenessRisk * 0.15
+    )
+  );
   if (riskNumber >= 86) return "Extreme";
   if (riskNumber >= 71) return "High";
   if (riskNumber >= 51) return "Medium";
