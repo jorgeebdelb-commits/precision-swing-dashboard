@@ -1,65 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useMemo, useState, type FormEvent } from "react";
 import type { BattlefieldApiResponse, BattlefieldOutput } from "@/lib/intelligence/types/battlefield";
 import { resolveBattlefieldState } from "@/lib/intelligence/resolver/battlefieldStateResolver";
-import InfoHelp from "@/components/ui/InfoHelp";
+
+type Timeframe = "5m" | "15m" | "1H" | "4H" | "1D" | "1W";
 
 interface IntelligenceDashboardShellProps { initialData: BattlefieldApiResponse; }
 
-function toPercent(value?: number) {
-  if (typeof value !== "number" || Number.isNaN(value)) return 0;
-  return Math.max(0, Math.min(100, value));
-}
+const stateColors: Record<string, string> = { READY: "state-ready", SETUP: "state-setup", WATCH: "state-watch", AVOID: "state-avoid" };
 
-function toneClass(value: string | undefined) {
-  if (!value) return "tone-neutral";
-  const normalized = value.toLowerCase();
-  if (normalized.includes("high") || normalized.includes("risk-off") || normalized.includes("avoid") || normalized.includes("put")) return "tone-danger";
-  if (normalized.includes("moderate") || normalized.includes("watch") || normalized.includes("neutral") || normalized.includes("normal")) return "tone-warn";
-  if (normalized.includes("low") || normalized.includes("buy") || normalized.includes("strong") || normalized.includes("tailwind") || normalized.includes("positive")) return "tone-good";
-  return "tone-neutral";
-}
+const tfOptions: Timeframe[] = ["5m", "15m", "1H", "4H", "1D", "1W"];
 
-function instrumentMix(deployment: BattlefieldOutput["deployment"]) {
-  return [
-    { label: "Shares", on: deployment.preferredInstrument === "Shares" },
-    { label: "Calls", on: deployment.preferredInstrument === "Calls" },
-    { label: "Puts", on: deployment.preferredInstrument === "Puts" },
-    { label: "LEAPS", on: deployment.preferredInstrument === "LEAPS" },
-  ];
-}
-
-function classificationClass(value: BattlefieldOutput["primaryOpportunity"]) {
-  const bullishStates = ["Institutional Accumulation", "Tactical Long", "Defensive Compounder", "Momentum Expansion", "Cyclical Recovery"];
-  const speculativeStates = ["Speculative Accumulation", "High-Risk Growth"];
-  const neutralStates = ["Watch", "Neutral Expansion"];
-  const bearishStates = ["Distribution", "Risk-Off", "Avoid"];
-
-  if (value && bullishStates.includes(value)) return "class-both";
-  if (value && speculativeStates.includes(value)) return "class-swing";
-  if (value && neutralStates.includes(value)) return "class-long";
-  if (value && bearishStates.includes(value)) return "class-neither";
-  return "class-neither";
-}
-
-function classificationToneClass(value: BattlefieldOutput["primaryOpportunity"] | undefined) {
-  const bullishStates = ["Institutional Accumulation", "Tactical Long", "Defensive Compounder", "Momentum Expansion", "Cyclical Recovery"];
-  const speculativeStates = ["Speculative Accumulation", "High-Risk Growth"];
-  const neutralStates = ["Watch", "Neutral Expansion"];
-  const bearishStates = ["Distribution", "Risk-Off", "Avoid"];
-
-  if (value && bullishStates.includes(value)) return "tone-good";
-  if (value && speculativeStates.includes(value)) return "tone-warn";
-  if (value && neutralStates.includes(value)) return "tone-neutral";
-  if (value && bearishStates.includes(value)) return "tone-danger";
-  return "tone-neutral";
-}
-
-type CapitalFeedbackOutcome = "Worked" | "Stopped out" | "Target hit" | "Bad signal" | "Wrong instrument";
-type ConfidenceGrade = "Danger" | "Low" | "Moderate" | "High" | "Elite";
-
-function parseDollarRange(value: string | undefined) {
+function parseDollarRange(value?: string) {
   if (!value) return null;
   const matches = value.match(/-?\d+(?:\.\d+)?/g);
   if (!matches || matches.length === 0) return null;
@@ -68,32 +21,18 @@ function parseDollarRange(value: string | undefined) {
   return numbers.reduce((sum, item) => sum + item, 0) / numbers.length;
 }
 
-function nextThirdFriday(year: number, month: number) {
-  const date = new Date(Date.UTC(year, month, 1));
-  let fridayCount = 0;
-  while (date.getUTCMonth() === month) {
-    if (date.getUTCDay() === 5) fridayCount += 1;
-    if (fridayCount === 3) return new Date(date);
-    date.setUTCDate(date.getUTCDate() + 1);
-  }
-  return new Date(Date.UTC(year, month + 1, 1));
-}
-
-function confidenceGrade(confidence: number): ConfidenceGrade {
-  if (confidence < 30) return "Danger";
-  if (confidence < 50) return "Low";
-  if (confidence < 70) return "Moderate";
-  if (confidence < 85) return "High";
-  return "Elite";
+function engineState(resolved: ReturnType<typeof resolveBattlefieldState> | null) {
+  const p = resolved?.primaryOpportunity ?? "WATCH";
+  if (p.toLowerCase().includes("avoid") || p.toLowerCase().includes("risk-off")) return "AVOID";
+  if (p.toLowerCase().includes("watch") || p.toLowerCase().includes("neutral")) return "WATCH";
+  if (resolved?.battlefieldState?.toLowerCase().includes("ready")) return "READY";
+  if ((resolved?.confidenceAdjusted ?? 0) >= 75) return "READY";
+  return "SETUP";
 }
 
 export default function IntelligenceDashboardShell({ initialData }: IntelligenceDashboardShellProps) {
-  const [watchlistSymbols, setWatchlistSymbols] = useState(
-    () => (Array.isArray(initialData?.items) ? [...new Set(initialData.items.map((item) => item.symbol).filter(Boolean))].sort() : []),
-  );
-  const [itemsBySymbol, setItemsBySymbol] = useState<Record<string, BattlefieldOutput>>(
-    () => Object.fromEntries((initialData?.items ?? []).map((item) => [item.symbol, item])),
-  );
+  const [watchlistSymbols, setWatchlistSymbols] = useState(() => (Array.isArray(initialData?.items) ? [...new Set(initialData.items.map((item) => item.symbol).filter(Boolean))].sort() : []));
+  const [itemsBySymbol, setItemsBySymbol] = useState<Record<string, BattlefieldOutput>>(() => Object.fromEntries((initialData?.items ?? []).map((item) => [item.symbol, item])));
   const [selectedSymbol, setSelectedSymbol] = useState(() => watchlistSymbols[0] ?? "");
   const [search, setSearch] = useState("");
   const [addInput, setAddInput] = useState("");
@@ -101,337 +40,80 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [capitalInput, setCapitalInput] = useState("5000");
-  const [refreshStamp, setRefreshStamp] = useState(new Date().toISOString());
+  const [timeframe, setTimeframe] = useState<Timeframe>("1D");
   const [removingSymbols, setRemovingSymbols] = useState<Record<string, boolean>>({});
+  const [utilitiesOpen, setUtilitiesOpen] = useState(false);
 
   const refreshSymbol = useCallback(async (symbol: string, force = true) => {
-    const target = symbol.trim().toUpperCase();
-    if (!target) return;
-    setLoading(true);
-    setError(null);
+    const target = symbol.trim().toUpperCase(); if (!target) return;
+    setLoading(true); setError(null);
     try {
-      const response = await fetch(`/api/intelligence/refresh`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbols: [target], force }),
-      });
-      if (!response.ok) throw new Error("Failed to refresh battlefield data");
+      const response = await fetch(`/api/intelligence/refresh`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbols: [target], force }) });
+      if (!response.ok) throw new Error("Failed");
       const payload = (await response.json()) as BattlefieldApiResponse;
-      const next = payload.items?.[0];
-      if (!next) throw new Error(`No battlefield data returned for ${target}`);
+      const next = payload.items?.[0]; if (!next) throw new Error("No data");
       setItemsBySymbol((prev) => ({ ...prev, [target]: next }));
       setGeneratedAt(payload.generatedAt ?? new Date().toISOString());
-      setRefreshStamp(new Date().toISOString());
-    } catch {
-      setError("Live market data unavailable");
-    } finally {
-      setLoading(false);
-    }
+    } catch { setError("Live market data unavailable"); } finally { setLoading(false); }
   }, []);
-
-  useEffect(() => {
-    if (!selectedSymbol && watchlistSymbols.length > 0) {
-      setSelectedSymbol(watchlistSymbols[0]);
-    }
-  }, [selectedSymbol, watchlistSymbols]);
-
-  useEffect(() => {
-    if (!selectedSymbol) return;
-    const intervalId = window.setInterval(() => {
-      void refreshSymbol(selectedSymbol, true);
-    }, 10 * 60 * 1000);
-    return () => window.clearInterval(intervalId);
-  }, [refreshSymbol, selectedSymbol]);
-
-  const filteredSymbols = useMemo(() => {
-    const query = search.trim().toUpperCase();
-    if (!query) return watchlistSymbols;
-    return watchlistSymbols.filter((symbol) => symbol.includes(query));
-  }, [search, watchlistSymbols]);
 
   const selectedItem = selectedSymbol ? itemsBySymbol[selectedSymbol] : null;
-
-  const onSelectSymbol = useCallback((symbol: string) => {
-    setSelectedSymbol(symbol);
-    void refreshSymbol(symbol, true);
-  }, [refreshSymbol]);
-
-  const onAddSymbol = useCallback(async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const symbol = addInput.trim().toUpperCase();
-    if (!/^[A-Z]{1,6}$/.test(symbol)) {
-      setError("Ticker must be 1-6 letters.");
-      return;
-    }
-
-    if (!watchlistSymbols.includes(symbol)) {
-      setWatchlistSymbols((prev) => [...prev, symbol].sort());
-    }
-    setSelectedSymbol(symbol);
-    setAddInput("");
-    await refreshSymbol(symbol, true);
-  }, [addInput, refreshSymbol, watchlistSymbols]);
-
-  const removeSymbol = useCallback(async (symbol: string) => {
-    if (removingSymbols[symbol]) return;
-
-    const nextSymbols = watchlistSymbols.filter((entry) => entry !== symbol);
-    const selectedIndex = watchlistSymbols.indexOf(symbol);
-    const fallbackSymbol = selectedSymbol === symbol
-      ? nextSymbols[selectedIndex] ?? nextSymbols[selectedIndex - 1] ?? ""
-      : selectedSymbol;
-
-    setWatchlistSymbols(nextSymbols);
-    setItemsBySymbol((prev) => {
-      if (!(symbol in prev)) return prev;
-      const rest = { ...prev };
-      delete rest[symbol];
-      return rest;
-    });
-    setSelectedSymbol(fallbackSymbol);
-    setRemovingSymbols((prev) => ({ ...prev, [symbol]: true }));
-
-    try {
-      const response = await fetch(`/api/watchlist?symbol=${encodeURIComponent(symbol)}`, { method: "DELETE" });
-      if (!response.ok) throw new Error("Failed to remove symbol from watchlist.");
-    } catch (removeError) {
-      setError(removeError instanceof Error ? removeError.message : "Failed to remove symbol from watchlist.");
-      setWatchlistSymbols(watchlistSymbols);
-      setSelectedSymbol(selectedSymbol);
-    } finally {
-      setRemovingSymbols((prev) => {
-        const rest = { ...prev };
-        delete rest[symbol];
-        return rest;
-      });
-    }
-  }, [removingSymbols, selectedSymbol, watchlistSymbols]);
-
-  const resolvedBySymbol = useMemo(
-    () => Object.fromEntries(Object.entries(itemsBySymbol).map(([symbol, item]) => [symbol, resolveBattlefieldState(item)])),
-    [itemsBySymbol],
-  );
+  const resolvedBySymbol = useMemo(() => Object.fromEntries(Object.entries(itemsBySymbol).map(([symbol, item]) => [symbol, resolveBattlefieldState(item)])), [itemsBySymbol]);
   const resolved = selectedSymbol ? resolvedBySymbol[selectedSymbol] : null;
-  const swingPct = toPercent(selectedItem?.swing?.confidence);
-  const longPct = toPercent(selectedItem?.longTerm?.confidence);
-  const aggressivePct = selectedItem?.deployment?.sizingAggressiveness === "Full Size" ? 90 : selectedItem?.deployment?.sizingAggressiveness === "Half Size" ? 60 : selectedItem?.deployment?.sizingAggressiveness === "Starter Only" ? 35 : 10;
-  const capitalAmount = Number(capitalInput.replace(/[^\d.]/g, ""));
-  const safeCapital = Number.isFinite(capitalAmount) && capitalAmount > 0 ? capitalAmount : 0;
-  const shareRatio = resolved?.allocationBias === "Calls Allowed" ? 0.65 : 0.9;
-  const optionsRatio = Math.max(0, 1 - shareRatio);
-  const shareCapital = Math.round(safeCapital * shareRatio);
-  const optionsCapital = Math.round(safeCapital * optionsRatio);
-  const marketStatus = useMemo(() => {
-    const now = new Date();
-    const day = now.getUTCDay();
-    if (day === 0 || day === 6) return { label: "Weekend Planning Mode", detail: "Live momentum frozen. Focus on scenario planning.", mode: "weekend" };
-    const minutes = now.getUTCHours() * 60 + now.getUTCMinutes();
-    if (minutes >= 810 && minutes < 1200) return { label: "Market Hours", detail: "Live refresh enabled with higher cadence.", mode: "open" };
-    if (minutes >= 570 && minutes < 810) return { label: "Premarket Conditions", detail: "Liquidity still forming; confidence slightly discounted.", mode: "pre" };
-    return { label: "After-Hours Conditions", detail: "Low liquidity environment; use conservative deployment.", mode: "after" };
-  }, []);
-  const now = new Date();
-  const selectedPrice = typeof selectedItem?.price === "number" ? selectedItem.price : 0;
-  const liveUnavailable = selectedItem?.marketDataState === "offline" || !(typeof selectedItem?.price === "number" && selectedItem.price > 0);
-  const shareEntry = !liveUnavailable ? (parseDollarRange(selectedItem?.deployment?.entryRange) ?? selectedPrice) : null;
-  const shareStop = !liveUnavailable ? (parseDollarRange(selectedItem?.deployment?.stopRange) ?? selectedPrice * 0.93) : null;
-  const shareQuantity = !liveUnavailable && shareEntry && shareEntry > 0 ? Math.max(0, Math.floor(shareCapital / shareEntry)) : null;
-  const shareUsedCapital = typeof shareQuantity === "number" && typeof shareEntry === "number" ? Number((shareQuantity * shareEntry).toFixed(2)) : null;
-  const shareUnusedCash = typeof shareUsedCapital === "number" ? Number((shareCapital - shareUsedCapital).toFixed(2)) : null;
-  const shareTarget1 = !liveUnavailable ? (parseDollarRange(selectedItem?.swing?.target1) ?? (parseDollarRange(selectedItem?.deployment?.targetRange) ?? selectedPrice * 1.12)) : null;
-  const shareTarget2 = !liveUnavailable ? (parseDollarRange(selectedItem?.swing?.target2) ?? shareTarget1) : null;
-  const shareProfitAtTarget1 = typeof shareQuantity === "number" && typeof shareTarget1 === "number" && typeof shareEntry === "number" ? Number((shareQuantity * (shareTarget1 - shareEntry)).toFixed(2)) : null;
-  const shareProfitAtTarget2 = typeof shareQuantity === "number" && typeof shareTarget2 === "number" && typeof shareEntry === "number" ? Number((shareQuantity * (shareTarget2 - shareEntry)).toFixed(2)) : null;
 
-  const optionsReason = resolved?.deploymentPermission.reason ?? "Risk profile does not justify options exposure.";
-  const strategicOptionsPreferred = Boolean(
-    resolved && (resolved.deploymentPermission.callsAllowed || resolved.deploymentPermission.leapsAllowed || resolved.deploymentPermission.putsAllowed),
-  );
-  const optionType = resolved?.deploymentPermission.putsAllowed ? "Puts" : "Calls";
-  const optionDteDays = resolved?.deploymentPermission.leapsAllowed ? 270 : selectedItem?.macro?.volatilityState === "Expansion" ? 55 : 38;
-  const optionExpiryBase = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + optionDteDays));
-  const optionExpiry = nextThirdFriday(optionExpiryBase.getUTCFullYear(), optionExpiryBase.getUTCMonth());
-  const optionStrike = selectedPrice > 0 ? Number((optionType === "Calls" ? selectedPrice * 1.03 : selectedPrice * 0.97).toFixed(2)) : null;
-  const leapPreferred = resolved?.allocationBias === "LEAPS Preferred";
-  const optionPremium = selectedPrice > 0 ? Number((selectedPrice * (leapPreferred ? 0.12 : 0.045)).toFixed(2)) : null;
-  const contractCost = typeof optionPremium === "number" ? optionPremium * 100 : null;
-  const optionsExecutable = !liveUnavailable && strategicOptionsPreferred && typeof contractCost === "number" && contractCost > 0 && optionsCapital >= contractCost;
-  const contracts = optionsExecutable ? Math.max(1, Math.floor(optionsCapital / contractCost)) : 0;
-  const optionTotalCost = typeof contractCost === "number" ? Number((contracts * contractCost).toFixed(2)) : null;
-  const optionsCashRemaining = typeof optionTotalCost === "number" ? Number((optionsCapital - optionTotalCost).toFixed(2)) : null;
-  const optionStopLoss = typeof optionPremium === "number" ? Number((optionPremium * (leapPreferred ? 0.75 : 0.65)).toFixed(2)) : null;
-  const optionProfitTarget = typeof optionPremium === "number" ? Number((optionPremium * (leapPreferred ? 1.8 : 1.45)).toFixed(2)) : null;
-  const optionDte = Math.max(0, Math.round((optionExpiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
-  const optionLabel = optionDte >= 180 ? "LEAPS / long-dated call" : optionDte >= 30 && optionDte <= 60 ? `Swing ${optionType === "Puts" ? "Put" : "Call"}` : optionType;
-  const optionsPlanReason = strategicOptionsPreferred
-    ? typeof optionPremium === "number" && typeof contractCost === "number"
-      ? `Estimated premium $${optionPremium.toFixed(2)} requires about $${contractCost.toLocaleString()} per contract. Current options allocation is $${optionsCapital.toLocaleString()}.`
-      : "Awaiting live market data"
-    : optionsReason;
-  const effectiveAllocationLabel = optionsExecutable ? selectedItem?.deployment?.sizingAggressiveness ?? "Starter Only" : "Shares Only";
-  const convictionGrade = confidenceGrade(resolved?.confidenceAdjusted ?? 0);
+  const groupedSymbols = useMemo(() => {
+    const query = search.trim().toUpperCase();
+    const list = watchlistSymbols.filter((s) => (!query ? true : s.includes(query)));
+    return list.reduce<Record<string, string[]>>((acc, symbol) => {
+      const state = engineState(resolvedBySymbol[symbol]);
+      acc[state] = [...(acc[state] ?? []), symbol]; return acc;
+    }, { READY: [], SETUP: [], WATCH: [], AVOID: [] });
+  }, [resolvedBySymbol, search, watchlistSymbols]);
 
-  const saveFeedback = useCallback((outcome: CapitalFeedbackOutcome) => {
-    if (!selectedItem) return;
-    const payload = {
-      symbol: selectedItem.symbol,
-      timestamp: new Date().toISOString(),
-      battlefieldSnapshot: selectedItem,
-      recommendedAllocation: {
-        sharesCapital: shareCapital,
-        optionsCapital,
-        sharesQty: shareQuantity,
-        optionsContracts: contracts,
-        optionType: optionsExecutable ? optionType : "none",
-      },
-      selectedTickerPrice: selectedPrice,
-      resolvedBias: resolved?.allocationBias ?? "Watch Only",
-      allocationStructure: optionsExecutable ? `${Math.round(shareRatio * 100)}% Shares + ${Math.round(optionsRatio * 100)}% ${leapPreferred ? "LEAPS" : optionType}` : "Shares Only",
-      confidence: resolved?.confidenceAdjusted ?? 0,
-      marketState: marketStatus.label,
-      outcome,
-    };
-    const storageKey = "capital-allocation-feedback-v1";
-    const existing = JSON.parse(window.localStorage.getItem(storageKey) ?? "[]") as unknown[];
-    window.localStorage.setItem(storageKey, JSON.stringify([payload, ...existing].slice(0, 250)));
-    console.info("[capital-feedback]", payload);
-  }, [contracts, leapPreferred, marketStatus.label, optionType, optionsCapital, optionsExecutable, optionsRatio, resolved?.allocationBias, resolved?.confidenceAdjusted, selectedItem, selectedPrice, shareCapital, shareQuantity, shareRatio]);
+  const chartLevels = useMemo(() => {
+    const price = selectedItem?.price ?? 0;
+    const entry = parseDollarRange(selectedItem?.deployment?.entryRange) ?? price * 1.01;
+    const stop = parseDollarRange(selectedItem?.deployment?.stopRange) ?? price * 0.96;
+    const target1 = parseDollarRange(selectedItem?.swing?.target1) ?? price * 1.05;
+    const target2 = parseDollarRange(selectedItem?.swing?.target2) ?? price * 1.1;
+    return { price, entry, stop, target1, target2, lr50: price * 0.99, lr100: price * 0.97, vwap: price * 1.002, support: price * 0.95, resistance: price * 1.08 };
+  }, [selectedItem]);
 
-  return (
-    <main className="intel-shell">
-      <div className="intel-wrap">
-        <header className="intel-topbar">
-          <h1 className="intel-title">Battlefield Intelligence Console</h1>
-          <p className="intel-meta">Generated {generatedAt ? new Date(generatedAt).toLocaleString() : "Unknown"}</p>
-          <div className={`market-banner market-${marketStatus.mode}`}>
-            <strong>{marketStatus.label}</strong>
-            <span>{marketStatus.detail}</span>
-            <em>Last refresh {new Date(refreshStamp).toLocaleTimeString()}</em>
-          </div>
-        </header>
+  const candles = useMemo(() => {
+    const base = chartLevels.price || 100;
+    return Array.from({ length: 40 }, (_, i) => {
+      const drift = Math.sin(i / 4) * 1.8 + (i - 20) * 0.04;
+      const open = base + drift + (Math.random() - 0.5) * 1.2;
+      const close = open + (Math.random() - 0.5) * 2.4;
+      const high = Math.max(open, close) + Math.random() * 1.5;
+      const low = Math.min(open, close) - Math.random() * 1.5;
+      return { open, close, high, low, volume: 40 + Math.random() * 80 };
+    });
+  }, [chartLevels.price]);
 
-        {error ? <p className="intel-alert">{error}</p> : null}
-        {liveUnavailable ? <p className="intel-alert">Analysis limited — live market feed unavailable.</p> : null}
-        {selectedItem ? (
-          <section className="market-data-status">
-            <h3>Market Data Status</h3>
-            <div className="market-data-grid">
-              <div><label>Provider</label><b>{selectedItem.marketDataProvider ?? "Unknown"}</b></div>
-              <div><label>Feed State</label><b>{selectedItem.marketDataState === "live" ? "Live" : selectedItem.marketDataState === "cached" ? "Cached" : "Offline"}</b></div>
-              <div><label>Last Success</label><b>{selectedItem.lastQuoteSuccessAt ? new Date(selectedItem.lastQuoteSuccessAt).toLocaleString() : "N/A"}</b></div>
-              <div><label>Last Error</label><b>{selectedItem.lastQuoteError ?? "None"}</b></div>
-              <div><label>Provider Latency</label><b>{typeof selectedItem.providerLatencyMs === "number" ? `${selectedItem.providerLatencyMs} ms` : "N/A"}</b></div>
-              <div><label>Retry Count</label><b>{selectedItem.quoteRetryCount ?? 0}</b></div>
-              <div><label>Stale Age</label><b>{typeof selectedItem.staleAgeSeconds === "number" ? `${selectedItem.staleAgeSeconds}s` : "N/A"}</b></div>
-              <div><label>API Quota</label><b>{selectedItem.quoteQuotaStatus ?? "Unknown"}</b></div>
-            </div>
-          </section>
-        ) : null}
+  const onSelectSymbol = useCallback((symbol: string) => { setSelectedSymbol(symbol); void refreshSymbol(symbol, true); }, [refreshSymbol]);
+  const removeSymbol = useCallback(async (symbol: string) => { if (removingSymbols[symbol]) return; setRemovingSymbols((p) => ({ ...p, [symbol]: true })); setWatchlistSymbols((prev) => prev.filter((x) => x !== symbol)); try { await fetch(`/api/watchlist?symbol=${encodeURIComponent(symbol)}`, { method: "DELETE" }); } finally { setRemovingSymbols((p) => { const n = { ...p }; delete n[symbol]; return n; }); } }, [removingSymbols]);
+  const onAddSymbol = useCallback(async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const symbol = addInput.trim().toUpperCase(); if (!/^[A-Z]{1,6}$/.test(symbol)) return; if (!watchlistSymbols.includes(symbol)) setWatchlistSymbols((prev) => [...prev, symbol].sort()); setSelectedSymbol(symbol); setAddInput(""); await refreshSymbol(symbol, true); }, [addInput, refreshSymbol, watchlistSymbols]);
 
-        <div className="intel-layout">
-          <aside className="watchlist-panel">
-            <div className="watchlist-header">
-              <h2>Watchlist</h2>
-              <button type="button" onClick={() => selectedSymbol && void refreshSymbol(selectedSymbol, true)} disabled={!selectedSymbol || loading}>
-                {loading ? "Refreshing…" : "Refresh"}
-              </button>
-            </div>
+  const totalCapital = Number(capitalInput.replace(/[^\d.]/g, "")) || 0;
 
-            <form className="add-symbol" onSubmit={onAddSymbol}>
-              <input
-                value={addInput}
-                onChange={(event) => setAddInput(event.target.value.toUpperCase())}
-                placeholder="+ Add Symbol"
-                aria-label="Add symbol"
-                maxLength={6}
-              />
-              <button type="submit">Add</button>
-            </form>
-
-            <input
-              className="watchlist-search"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search"
-              aria-label="Search symbols"
-            />
-
-            <div className="watchlist-rows">
-              {filteredSymbols.length === 0 ? (
-                <div className="watchlist-empty">
-                  <h3>Watchlist Empty</h3>
-                  <p>Add symbols to begin battlefield analysis.</p>
-                </div>
-              ) : null}
-              {filteredSymbols.map((symbol) => {
-                const item = itemsBySymbol[symbol];
-                const isRemoving = Boolean(removingSymbols[symbol]);
-                return (
-                  <div key={symbol} className={`watch-row ${selectedSymbol === symbol ? "selected" : ""}`}>
-                    <button type="button" className="watch-row-select" onClick={() => onSelectSymbol(symbol)}>
-                    <span>{symbol}</span>
-                    <span>{typeof item?.price === "number" && item.price > 0 ? item.price.toFixed(2) : "N/A"}</span>
-                    <span className={resolvedBySymbol[symbol] ? classificationClass(resolvedBySymbol[symbol].primaryOpportunity) : "class-neither"}>{resolvedBySymbol[symbol]?.primaryOpportunity ?? "Watch"}</span>
-                    </button>
-                    <span className="watch-row-action">
-                      <button
-                        type="button"
-                        className="watch-row-remove"
-                        onClick={() => void removeSymbol(symbol)}
-                        aria-label={`Remove ${symbol} from watchlist`}
-                        disabled={isRemoving}
-                      >
-                        ×
-                      </button>
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </aside>
-
-          <section className="battlefield-main">
-            {!selectedItem ? (
-              <div className="symbol-banner"><h2>No ticker selected</h2><p>Select a symbol from the watchlist.</p></div>
-            ) : (
-              <section className="tactical-cluster">
-                <div className="symbol-banner">
-                  <h2>{selectedItem.symbol}</h2>
-                  <div className={`status-chip ${classificationToneClass(resolved?.primaryOpportunity)}`}>{resolved?.primaryOpportunity ?? "Watch"}</div>
-                  <p>{resolved?.battlefieldState ?? "No Edge"} • Confidence {resolved?.confidenceAdjusted ?? 0}% · {convictionGrade} Conviction · {effectiveAllocationLabel} • {resolved?.tacticalSummary ?? selectedItem.battlefieldSummary}</p>
-                  <p>{selectedItem.price > 0 ? (selectedItem.priceTimestamp ? "🟢 Live Market Data" : "🟡 Cached Market Data") : "🔴 Market Data Offline"}</p>
-                  {resolved?.riskFlags?.length ? <div className="deployment-mix">{resolved.riskFlags.map((flag) => <span key={flag} className="inactive">{flag}</span>)}</div> : null}
-                </div>
-                <div className="grid-ops">
-                  <article className="glass-card card-swing">
-                    <h3>Swing Battlefield <InfoHelp title="Swing Battlefield" content="Measures tactical momentum, entry/stop/targets, confidence weighting, and risk-reward quality for short-horizon execution. Bullish means clean structure with favorable R:R. Dangerous means weak momentum or poor reward asymmetry." /></h3>
-                    <div className="metric-row"><span>Confidence</span><strong>{swingPct}%</strong></div>
-                    <div className="meter"><i style={{ width: `${swingPct}%` }} /></div>
-                    <div className="metric-row"><span>Momentum</span><span className={toneClass(selectedItem.swing?.momentumQuality)}>{selectedItem.swing?.momentumQuality}</span></div>
-                    <div className="entry-map"><div><label>Entry</label><b>{selectedItem.marketDataState === "offline" ? "N/A" : selectedItem.swing?.entryZone ?? "N/A"}</b></div><div><label>Stop</label><b>{selectedItem.marketDataState === "offline" ? "N/A" : selectedItem.swing?.stopZone ?? "N/A"}</b></div><div><label>T1</label><b>{selectedItem.marketDataState === "offline" ? "N/A" : selectedItem.swing?.target1 ?? "N/A"}</b></div><div><label>T2</label><b>{selectedItem.marketDataState === "offline" ? "N/A" : selectedItem.swing?.target2 ?? "N/A"}</b></div></div>
-                  </article>
-
-                  <article className="glass-card card-long">
-                    <h3>Long-Term Battlefield <InfoHelp title="Long-Term Battlefield" content="Tracks accumulation quality, institutional sponsorship, expected horizon path, and LEAP suitability. Bullish = stronger base and durable trend. Dangerous = weak sponsorship or low long-term quality." /></h3>
-                    <div className="metric-row"><span>Accumulation Quality</span><strong>{selectedItem.longTerm?.longTermQuality ?? "-"}</strong></div>
-                    <div className="metric-row"><span>Institutional Strength</span><span className={toneClass(selectedItem.longTerm?.institutionalStrength)}>{selectedItem.longTerm?.institutionalStrength ?? "-"}</span></div>
-                    <div className="metric-row"><span>LEAP Suitability</span><span className={toneClass(selectedItem.longTerm?.leapSuitability)}>{selectedItem.longTerm?.leapSuitability ?? "-"}</span></div>
-                    <div className="metric-row"><span>Horizon</span><strong>{selectedItem.longTerm?.expected3M ?? "-"} / {selectedItem.longTerm?.expected6M ?? "-"} / {selectedItem.longTerm?.expected1Y ?? "-"}</strong></div>
-                    <div className="meter long"><i style={{ width: `${longPct}%` }} /></div>
-                  </article>
-
-                  <article className="glass-card card-whale"><h3>Whale Intelligence <InfoHelp title="Whale Intelligence" content="Detects trap radar, exhaustion, squeeze probability, flow imbalance, and distribution behavior. Bullish = low trap risk with constructive flow. Dangerous = high trap risk, exhaustion, or distribution pockets." /></h3><div className="radar-grid"><div><small>Trap Radar</small><p className={toneClass(selectedItem.whale?.trapRisk)}>{selectedItem.whale?.trapRisk ?? "-"}</p></div><div><small>Exhaustion</small><p className={toneClass(selectedItem.whale?.exhaustionRisk)}>{selectedItem.whale?.exhaustionRisk ?? "-"}</p></div><div><small>Flow</small><p className={toneClass(selectedItem.whale?.unusualFlow)}>{selectedItem.whale?.unusualFlow ?? "-"}</p></div><div><small>Squeeze</small><p className={toneClass(selectedItem.whale?.squeezePotential)}>{selectedItem.whale?.squeezePotential ?? "-"}</p></div></div></article>
-
-                  <article className="glass-card card-macro"><h3>Macro Terrain <InfoHelp title="Macro Terrain" content="Classifies risk-on/risk-off context, volatility compression/expansion, and sector pressure. Macro modifies deployment aggressiveness: favorable terrain allows size; hostile terrain requires tighter risk posture." /></h3><div className={`terrain-banner ${toneClass(selectedItem.macro?.terrain)}`}>{selectedItem.macro?.terrain ?? "Unknown"}</div><div className="metric-row"><span>Volatility</span><strong>{selectedItem.macro?.volatilityState ?? "-"}</strong></div><div className="metric-row"><span>Condition</span><strong>{selectedItem.macro?.sectorPressure ?? "-"}</strong></div><div className="metric-row"><span>Sentiment</span><strong>{selectedItem.sentiment?.sentimentState ?? "-"}</strong></div></article>
-
-                  <article className="glass-card card-deploy"><h3>Deployment Panel <InfoHelp title="Deployment Panel" content="Explains why shares vs calls vs puts vs LEAPS are selected and how aggressiveness shifts from starter-only to full-size. Confidence blends swing quality, long-term structure, macro terrain, and whale trap risk." /></h3><div className="deployment-mix">{instrumentMix(selectedItem.deployment).map((slot) => <span key={slot.label} className={slot.on ? `active ${classificationToneClass(resolved?.primaryOpportunity)}` : "inactive"}>{slot.label}</span>)}</div><div className="metric-row"><span>Aggressiveness</span><strong className={classificationToneClass(resolved?.primaryOpportunity)}>{selectedItem.deployment?.sizingAggressiveness ?? "-"}</strong></div><div className="meter"><i style={{ width: `${aggressivePct}%` }} /></div><div className="entry-map"><div><label>Entry</label><b>{selectedItem.deployment?.entryRange ?? "-"}</b></div><div><label>Stop</label><b>{selectedItem.deployment?.stopRange ?? "-"}</b></div><div><label>Target</label><b>{selectedItem.deployment?.targetRange ?? "-"}</b></div><div><label>Return Band</label><b>{selectedItem.deployment?.estimatedReturn ?? "-"}</b></div></div></article>
-                  <article className="glass-card card-capital"><h3>Capital Allocation Engine <InfoHelp title="Capital Allocation Engine" content="Translates battlefield probability into deployable capital structure. Bullish setup can support hybrid shares+options. Neutral favors starter size. Dangerous suppresses options and preserves cash." /></h3><div className="metric-row"><span>Total Capital</span><input className="capital-input" value={capitalInput} onChange={(event) => setCapitalInput(event.target.value)} /></div><div className="entry-map"><div><label>Shares Plan</label><b>{typeof shareUsedCapital === "number" && typeof shareQuantity === "number" ? `$${shareUsedCapital.toLocaleString()} • ${shareQuantity} shares` : "N/A"}</b></div><div><label>Entry / Stop</label><b>{typeof shareEntry === "number" && typeof shareStop === "number" ? `$${shareEntry.toFixed(2)} / $${shareStop.toFixed(2)}` : "N/A"}</b></div><div><label>T1 / T2 Profit</label><b>{typeof shareProfitAtTarget1 === "number" && typeof shareProfitAtTarget2 === "number" ? `$${shareProfitAtTarget1.toLocaleString()} / $${shareProfitAtTarget2.toLocaleString()}` : "N/A"}</b></div><div><label>Unused Share Cash</label><b>{typeof shareUnusedCash === "number" ? `$${shareUnusedCash.toLocaleString()}` : "N/A"}</b></div><div><label>Structure</label><b>{liveUnavailable ? "Unavailable" : optionsExecutable ? `${Math.round(shareRatio * 100)}% Shares + ${Math.round(optionsRatio * 100)}% ${leapPreferred ? "LEAPS" : optionType}` : "Shares Only (options not executable)"}</b></div><div><label>Market State</label><b className={classificationToneClass(resolved?.primaryOpportunity)}>{marketStatus.label} • {now.toUTCString()}</b></div><div><label>Options Plan</label><b>{liveUnavailable ? "N/A" : optionsExecutable && typeof optionStrike === "number" && typeof optionPremium === "number" ? `${optionLabel} ${optionExpiry.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })} $${optionStrike} @ ~$${optionPremium}` : "Not executable"}</b></div>{optionsExecutable ? <><div><label>Contracts / Cost</label><b>{typeof optionTotalCost === "number" ? `${contracts} contracts • $${optionTotalCost.toLocaleString()}` : "N/A"}</b></div><div><label>Remaining Options Cash</label><b>{typeof optionsCashRemaining === "number" ? `$${optionsCashRemaining.toLocaleString()}` : "N/A"}</b></div><div><label>Option Stop / Target</label><b>{typeof optionStopLoss === "number" && typeof optionProfitTarget === "number" ? `$${optionStopLoss.toFixed(2)} / $${optionProfitTarget.toFixed(2)}` : "N/A"}</b></div></> : <><div><label>Reason</label><b>{liveUnavailable ? "Awaiting live market data" : optionsPlanReason}</b></div><div><label>Required capital for 1 contract</label><b>{typeof contractCost === "number" ? `$${contractCost.toLocaleString()}` : "N/A"}</b></div></>}<div><label>Strategic Bias</label><b className={classificationToneClass(resolved?.primaryOpportunity)}>{resolved?.allocationBias ?? "Watch Only"} • {resolved?.confidenceAdjusted ?? 0}%</b></div><div><label>Executable Deployment</label><b>{liveUnavailable ? "Unavailable" : effectiveAllocationLabel}</b></div></div><div className="feedback-buttons"><button type="button" onClick={() => saveFeedback("Worked")}>Worked</button><button type="button" onClick={() => saveFeedback("Stopped out")}>Stopped Out</button><button type="button" onClick={() => saveFeedback("Target hit")}>Target Hit</button><button type="button" onClick={() => saveFeedback("Bad signal")}>Bad Signal</button><button type="button" onClick={() => saveFeedback("Wrong instrument")}>Wrong Instrument</button></div></article>
-                </div>
-              </section>
-            )}
-          </section>
-        </div>
-      </div>
-    </main>
-  );
+  return <main className="intel-v9"><div className="regime-banner">MARKET REGIME: {selectedItem?.macro?.terrain ?? "Unknown"} • QQQ {selectedItem?.macro?.sectorPressure ?? "Mixed"} • VIX {selectedItem?.macro?.volatilityState ?? "N/A"}</div><div className="layout-v9">
+    <aside className="watch-sidebar"><div className="watch-head"><h2>Watchlists</h2><button onClick={() => selectedSymbol && void refreshSymbol(selectedSymbol)}>{loading ? "…" : "Refresh"}</button></div><form className="add-symbol" onSubmit={onAddSymbol}><input value={addInput} onChange={(e) => setAddInput(e.target.value.toUpperCase())} placeholder="+Ticker" /><button type="submit">Add</button></form><input className="watch-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search" />{(["READY", "SETUP", "WATCH", "AVOID"] as const).map((group) => <section key={group}><h3>{group}</h3><div className="watch-group">{groupedSymbols[group].map((symbol) => { const r = resolvedBySymbol[symbol]; return <div className={`watch-item ${selectedSymbol === symbol ? "selected" : ""}`} key={symbol}><button onClick={() => onSelectSymbol(symbol)}><span>{symbol}</span><span className={stateColors[group]}>{Math.round(r?.confidenceAdjusted ?? 0)}</span><span>{(r?.primaryOpportunity?.toLowerCase().includes("risk") ? "↓" : r?.primaryOpportunity?.toLowerCase().includes("watch") ? "→" : "↑")}</span></button><button className="watch-remove" onClick={() => void removeSymbol(symbol)} disabled={Boolean(removingSymbols[symbol])}>×</button></div>; })}</div></section>)}</aside>
+    <section className="main-console">
+      <header className="console-head"><h1>V9 Trading Intelligence Console</h1><small>Generated {generatedAt ? new Date(generatedAt).toLocaleString() : "-"}</small></header>
+      {error ? <p className="intel-alert">{error}</p> : null}
+      <section className="chart-card"><div className="chart-toolbar"><div className="tf-group">{tfOptions.map((tf) => <button key={tf} className={timeframe === tf ? "active" : ""} onClick={() => setTimeframe(tf)}>{tf}</button>)}</div><div className="bias-mini"><span>Bullish</span><span>Neutral</span><span>Bearish</span></div></div>
+        <div className="chart-area">{candles.map((c, i) => <div key={i} className="candle" style={{ left: `${(i / candles.length) * 100}%` }}><i className="wick" style={{ height: `${Math.max(18, (c.high - c.low) * 6)}px` }} /><b className={c.close >= c.open ? "up" : "down"} style={{ height: `${Math.max(8, Math.abs(c.close - c.open) * 8)}px` }} /></div>)}<div className="line entry">Entry {chartLevels.entry.toFixed(2)}</div><div className="line stop">Stop {chartLevels.stop.toFixed(2)}</div><div className="line target">T1 {chartLevels.target1.toFixed(2)}</div></div>
+        <div className="trigger-text">Breakout above {chartLevels.entry.toFixed(2)} • Volume &gt;= 1.2x avg • Invalid below {chartLevels.stop.toFixed(2)}</div>
+      </section>
+      <section className="intel-panels">{[
+        ["Swing Engine", selectedItem?.swing?.momentumQuality, selectedItem?.swing?.confidence, selectedItem?.swing?.entryZone, selectedItem?.swing?.riskReward],
+        ["Long-Term Engine", selectedItem?.longTerm?.institutionalStrength, selectedItem?.longTerm?.confidence, selectedItem?.longTerm?.expected6M, selectedItem?.longTerm?.leapSuitability],
+        ["Whale Intelligence", selectedItem?.whale?.unusualFlow, resolved?.confidenceAdjusted, selectedItem?.whale?.trapRisk, selectedItem?.whale?.exhaustionRisk],
+        ["Macro Terrain", selectedItem?.macro?.terrain, resolved?.confidenceAdjusted, selectedItem?.macro?.sectorPressure, selectedItem?.macro?.volatilityState],
+      ].map(([title, direction, score, reason, risk]) => <article className="intel-panel" key={String(title)}><h3>{title}</h3><p>{String(direction ?? "Neutral")}</p><p>Score {Math.round(Number(score) || 0)}</p><p>{String(reason ?? "No reason")}</p><small>Risk contribution: {String(risk ?? "Moderate")}</small></article>)}</section>
+      <section className="execution-console"><h2>Execution Console</h2><div className="exec-state">{engineState(resolved) === "READY" ? "EXECUTION READY" : engineState(resolved) === "SETUP" ? "WAITING FOR CONFIRMATION" : "MONITOR ONLY"}</div><div className="exec-grid"><div>State <b>{resolved?.battlefieldState ?? "N/A"}</b></div><div>Strategy <b>{selectedItem?.deployment?.preferredInstrument ?? "N/A"}</b></div><div>Position Tier <b>{selectedItem?.deployment?.sizingAggressiveness ?? "N/A"}</b></div><div>Trigger <b>{selectedItem?.deployment?.entryRange ?? "N/A"}</b></div><div>Confirmation <b>{selectedItem?.swing?.momentumQuality ?? "N/A"}</b></div><div>Invalidation <b>{selectedItem?.deployment?.stopRange ?? "N/A"}</b></div><div>Stop <b>{selectedItem?.deployment?.stopRange ?? "N/A"}</b></div><div>Targets <b>{selectedItem?.deployment?.targetRange ?? "N/A"}</b></div><div>Tradeability <b>{resolved?.deploymentPermission.reason ?? "N/A"}</b></div><div>Risk <b>{resolved?.riskFlags?.join(", ") ?? "Normal"}</b></div></div></section>
+      <section className="allocation"><h2>Capital Allocation Engine</h2><div className="alloc-grid"><label>Total Capital<input value={capitalInput} onChange={(e) => setCapitalInput(e.target.value)} /></label><div>Risk Style <b>{selectedItem?.deployment?.sizingAggressiveness ?? "Starter"}</b></div><div>Horizon Focus <b>{timeframe}</b></div><div>Shares allocation <b>{Math.round(totalCapital * 0.7).toLocaleString()}</b></div><div>Calls allocation <b>{Math.round(totalCapital * 0.2).toLocaleString()}</b></div><div>Cash reserve <b>{Math.round(totalCapital * 0.1).toLocaleString()}</b></div><div>Position size % <b>2.5%</b></div><div>Max portfolio risk <b>1.0%</b></div></div></section>
+    </section>
+  </div><footer className={`utilities ${utilitiesOpen ? "open" : ""}`}><button onClick={() => setUtilitiesOpen((x) => !x)}>System Utilities</button>{utilitiesOpen ? <div className="util-grid"><div>Market Data Status: {selectedItem?.marketDataState ?? "N/A"}</div><div>Weekend Planning Mode: {new Date().getUTCDay() === 0 || new Date().getUTCDay() === 6 ? "ON" : "OFF"}</div><div>Feed diagnostics: {selectedItem?.lastQuoteError ?? "Healthy"}</div></div> : null}</footer></main>;
 }
