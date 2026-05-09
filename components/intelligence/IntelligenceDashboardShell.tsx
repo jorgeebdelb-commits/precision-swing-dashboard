@@ -292,7 +292,7 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
         </header>
 
         {error ? <p className="intel-alert">{error}</p> : null}
-        {liveUnavailable ? <p className="intel-alert">Unavailable — Awaiting live market data. Market pricing offline.</p> : null}
+        {liveUnavailable ? <p className="intel-alert">Analysis limited — live market feed unavailable.</p> : null}
         {selectedItem ? (
           <section className="market-data-status">
             <h3>Market Data Status</h3>
@@ -301,6 +301,10 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
               <div><label>Feed State</label><b>{selectedItem.marketDataState === "live" ? "Live" : selectedItem.marketDataState === "cached" ? "Cached" : "Offline"}</b></div>
               <div><label>Last Success</label><b>{selectedItem.lastQuoteSuccessAt ? new Date(selectedItem.lastQuoteSuccessAt).toLocaleString() : "N/A"}</b></div>
               <div><label>Last Error</label><b>{selectedItem.lastQuoteError ?? "None"}</b></div>
+              <div><label>Provider Latency</label><b>{typeof selectedItem.providerLatencyMs === "number" ? `${selectedItem.providerLatencyMs} ms` : "N/A"}</b></div>
+              <div><label>Retry Count</label><b>{selectedItem.quoteRetryCount ?? 0}</b></div>
+              <div><label>Stale Age</label><b>{typeof selectedItem.staleAgeSeconds === "number" ? `${selectedItem.staleAgeSeconds}s` : "N/A"}</b></div>
+              <div><label>API Quota</label><b>{selectedItem.quoteQuotaStatus ?? "Unknown"}</b></div>
             </div>
           </section>
         ) : null}
