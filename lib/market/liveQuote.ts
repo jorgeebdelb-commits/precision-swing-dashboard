@@ -6,7 +6,8 @@ export interface LiveMarketSnapshot {
   bid: number | null;
   ask: number | null;
   volume: number | null;
-  timestamp: string;
+  timestamp: string | null;
+  currentPrice: number | null;
   session: MarketSessionState;
   stale: boolean;
   unavailable: boolean;
@@ -26,12 +27,16 @@ function getSession(now: Date): MarketSessionState {
 }
 
 export async function getLiveQuote(symbol: string): Promise<LiveMarketSnapshot> {
+  console.log("[LIVE SNAPSHOT] request", symbol);
   const normalized = symbol.trim().toUpperCase();
   const now = new Date();
   const session = getSession(now);
   const apiKey = process.env.FINNHUB_API_KEY;
 
-  if (!apiKey) return { symbol: normalized, price: null, bid: null, ask: null, volume: null, timestamp: now.toISOString(), session, stale: true, unavailable: true, unavailableReason: "Missing FINNHUB_API_KEY" };
+  if (!apiKey) {
+    console.warn("[LIVE SNAPSHOT] Missing FINNHUB_API_KEY for", normalized);
+    return { symbol: normalized, price: null, currentPrice: null, bid: null, ask: null, volume: null, timestamp: null, session, stale: true, unavailable: true, unavailableReason: "Missing FINNHUB_API_KEY" };
+  }
 
   try {
     const quoteUrl = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(normalized)}&token=${apiKey}`;
@@ -41,7 +46,10 @@ export async function getLiveQuote(symbol: string): Promise<LiveMarketSnapshot> 
 
     const [quoteResponse, candleResponse] = await Promise.all([fetch(quoteUrl, { cache: "no-store" }), fetch(candleUrl, { cache: "no-store" })]);
 
-    if (!quoteResponse.ok || !candleResponse.ok) return { symbol: normalized, price: null, bid: null, ask: null, volume: null, timestamp: now.toISOString(), session, stale: true, unavailable: true, unavailableReason: "Quote provider request failed" };
+    if (!quoteResponse.ok || !candleResponse.ok) {
+      console.error("[LIVE SNAPSHOT] provider request failed", normalized, quoteResponse.status, candleResponse.status);
+      return { symbol: normalized, price: null, currentPrice: null, bid: null, ask: null, volume: null, timestamp: null, session, stale: true, unavailable: true, unavailableReason: "Quote provider request failed" };
+    }
 
     const quote = await quoteResponse.json();
     const candle = await candleResponse.json();
@@ -53,11 +61,15 @@ export async function getLiveQuote(symbol: string): Promise<LiveMarketSnapshot> 
     const timestamp = quoteTsMs > 0 ? new Date(quoteTsMs) : now;
     const stale = session === "weekend" ? true : now.getTime() - timestamp.getTime() > STALE_MS;
 
-    if (!Number.isFinite(rawPrice) || rawPrice <= 0) return { symbol: normalized, price: null, bid: null, ask: null, volume: null, timestamp: timestamp.toISOString(), session, stale: true, unavailable: true, unavailableReason: "No live last-trade price" };
+    if (!Number.isFinite(rawPrice) || rawPrice <= 0) {
+      console.warn("[LIVE SNAPSHOT] invalid live price", normalized, quote);
+      return { symbol: normalized, price: null, currentPrice: null, bid: null, ask: null, volume: null, timestamp: timestamp.toISOString(), session, stale: true, unavailable: true, unavailableReason: "No live last-trade price" };
+    }
 
-    return {
+    const snapshot = {
       symbol: normalized,
       price: rawPrice,
+      currentPrice: rawPrice,
       bid: Number.isFinite(Number(quote?.b)) && Number(quote.b) > 0 ? Number(quote.b) : null,
       ask: Number.isFinite(Number(quote?.a)) && Number(quote.a) > 0 ? Number(quote.a) : null,
       volume: Number.isFinite(latestVolume) && latestVolume !== null ? latestVolume : null,
@@ -67,7 +79,10 @@ export async function getLiveQuote(symbol: string): Promise<LiveMarketSnapshot> 
       unavailable: stale && session !== "regular",
       unavailableReason: stale ? "Live quote is stale" : undefined,
     };
-  } catch {
-    return { symbol: normalized, price: null, bid: null, ask: null, volume: null, timestamp: now.toISOString(), session, stale: true, unavailable: true, unavailableReason: "Live quote fetch failed" };
+    console.log("[LIVE SNAPSHOT]", normalized, snapshot);
+    return snapshot;
+  } catch (error) {
+    console.error("[LIVE SNAPSHOT] fetch failed", normalized, error);
+    return { symbol: normalized, price: null, currentPrice: null, bid: null, ask: null, volume: null, timestamp: null, session, stale: true, unavailable: true, unavailableReason: "Live quote fetch failed" };
   }
 }

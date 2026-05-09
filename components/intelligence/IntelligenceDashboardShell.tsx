@@ -212,7 +212,8 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
     return { label: "After-Hours Conditions", detail: "Low liquidity environment; use conservative deployment.", mode: "after" };
   }, []);
   const now = new Date();
-  const selectedPrice = selectedItem?.price ?? 0;
+  const selectedPrice = typeof selectedItem?.price === "number" ? selectedItem.price : 0;
+  const liveUnavailable = !(typeof selectedItem?.price === "number" && selectedItem.price > 0);
   const shareEntry = parseDollarRange(selectedItem?.deployment?.entryRange) ?? selectedPrice;
   const shareStop = parseDollarRange(selectedItem?.deployment?.stopRange) ?? selectedPrice * 0.93;
   const shareQuantity = shareEntry > 0 ? Math.max(0, Math.floor(shareCapital / shareEntry)) : 0;
@@ -289,6 +290,7 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
         </header>
 
         {error ? <p className="intel-alert">{error}</p> : null}
+        {liveUnavailable ? <p className="intel-alert">Live market data unavailable. Using stale cached market data.</p> : null}
 
         <div className="intel-layout">
           <aside className="watchlist-panel">

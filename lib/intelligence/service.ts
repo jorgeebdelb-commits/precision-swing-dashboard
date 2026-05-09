@@ -1,6 +1,7 @@
 import { normalizeSymbolInput, type NormalizedSymbolInput } from "@/lib/intelligence/adapters/normalizeSymbolInput";
 import { routeBattlefield } from "@/lib/intelligence/router/battlefieldRouter";
 import { getLiveQuote } from "@/lib/market/liveQuote";
+import { createFallbackSnapshot } from "@/lib/market/fallbackSnapshot";
 import type { BattlefieldApiResponse } from "@/lib/intelligence/types/battlefield";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { WATCHLIST_TABLE } from "@/lib/watchlist/schema";
@@ -14,35 +15,60 @@ export async function getWatchlistSymbols(): Promise<string[]> {
 }
 
 async function buildInput(symbol: string): Promise<NormalizedSymbolInput> {
-  const live = await getLiveQuote(symbol);
-  if (live.unavailable || live.price == null || live.price <= 0) {
-    throw new Error(`Live market data unavailable for ${symbol}`);
+  try {
+    const live = await getLiveQuote(symbol);
+    const price = typeof live.price === "number" && live.price > 0 ? live.price : 100;
+    const spread = typeof live.bid === "number" && typeof live.ask === "number" ? Math.max(0, live.ask - live.bid) : price * 0.003;
+    const support = Math.max(0.01, price - Math.max(spread * 4, price * 0.015));
+    const resistance = price + Math.max(spread * 4, price * 0.015);
+
+    if (live.unavailable || live.price == null || live.price <= 0) {
+      console.warn("[LIVE SNAPSHOT] using stale cached market data", symbol, live.unavailableReason);
+    }
+
+    return normalizeSymbolInput({
+      symbol,
+      price,
+      support,
+      resistance,
+      lr50: price,
+      lr100: price,
+      vwap: price,
+      rsi: 50,
+      atrPercent: (Math.max(0.01, resistance - support) / price) * 100,
+      volumeRatio: 1,
+      volume: live.volume ?? 0,
+      technicalScore: 0,
+      fundamentalsScore: 0,
+      macroScore: 0,
+      politicalScore: 0,
+      sentimentScore: 0,
+      flowScore: 0,
+    });
+  } catch (error) {
+    const fallback = createFallbackSnapshot({ symbol, session: "closed", reason: "buildInput failed" });
+    console.error("[LIVE SNAPSHOT] buildInput failed", symbol, error, fallback);
+    const price = 100;
+    return normalizeSymbolInput({
+      symbol,
+      price,
+      support: price * 0.985,
+      resistance: price * 1.015,
+      lr50: price,
+      lr100: price,
+      vwap: price,
+      rsi: 50,
+      atrPercent: 3,
+      volumeRatio: 1,
+      volume: 0,
+      technicalScore: 0,
+      fundamentalsScore: 0,
+      macroScore: 0,
+      politicalScore: 0,
+      sentimentScore: 0,
+      flowScore: 0,
+    });
   }
-
-  const price = live.price;
-  const spread = live.bid != null && live.ask != null ? Math.max(0, live.ask - live.bid) : price * 0.003;
-  const support = Math.max(0.01, price - Math.max(spread * 4, price * 0.015));
-  const resistance = price + Math.max(spread * 4, price * 0.015);
-
-  return normalizeSymbolInput({
-    symbol,
-    price,
-    support,
-    resistance,
-    lr50: price,
-    lr100: price,
-    vwap: price,
-    rsi: 50,
-    atrPercent: (Math.max(0.01, resistance - support) / price) * 100,
-    volumeRatio: 1,
-    volume: live.volume ?? 0,
-    technicalScore: 0,
-    fundamentalsScore: 0,
-    macroScore: 0,
-    politicalScore: 0,
-    sentimentScore: 0,
-    flowScore: 0,
-  });
 }
 
 export interface GetIntelligenceConfig {
@@ -53,7 +79,10 @@ export interface GetIntelligenceConfig {
 
 export async function getIntelligence({ symbols }: GetIntelligenceConfig): Promise<BattlefieldApiResponse> {
   console.log("[intelligence] symbols entering getIntelligence:", symbols);
-  const inputs = await Promise.all(symbols.map((symbol) => buildInput(symbol.toUpperCase())));
+  const settled = await Promise.allSettled(symbols.map((symbol) => buildInput(symbol.toUpperCase())));
+  const inputs = settled
+    .filter((item): item is PromiseFulfilledResult<NormalizedSymbolInput> => item.status === "fulfilled")
+    .map((item) => item.value);
   const items = inputs.map((input) => routeBattlefield(input));
   console.log(
     "[intelligence] battlefield results:",
