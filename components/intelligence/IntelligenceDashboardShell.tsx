@@ -103,8 +103,8 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
       setItemsBySymbol((prev) => ({ ...prev, [target]: next }));
       setGeneratedAt(payload.generatedAt ?? new Date().toISOString());
       setRefreshStamp(new Date().toISOString());
-    } catch (refreshError) {
-      setError(refreshError instanceof Error ? refreshError.message : "Unable to refresh selected ticker");
+    } catch {
+      setError("Live market data unavailable");
     } finally {
       setLoading(false);
     }
@@ -332,7 +332,7 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
                   <div key={symbol} className={`watch-row ${selectedSymbol === symbol ? "selected" : ""}`}>
                     <button type="button" className="watch-row-select" onClick={() => onSelectSymbol(symbol)}>
                     <span>{symbol}</span>
-                    <span>{typeof item?.price === "number" ? item.price.toFixed(2) : "-"}</span>
+                    <span>{typeof item?.price === "number" && item.price > 0 ? item.price.toFixed(2) : "Live market data unavailable"}</span>
                     <span className={resolvedBySymbol[symbol] ? classificationClass(resolvedBySymbol[symbol].primaryOpportunity) : "class-neither"}>{resolvedBySymbol[symbol]?.primaryOpportunity ?? "Neither"}</span>
                     </button>
                     <span className="watch-row-action">
