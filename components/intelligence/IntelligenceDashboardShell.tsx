@@ -37,7 +37,8 @@ function classificationClass(value: BattlefieldOutput["primaryOpportunity"]) {
   return "class-neither";
 }
 
-type CapitalFeedbackOutcome = "This worked" | "Stopped out" | "Target hit" | "Bad signal" | "Wrong instrument";
+type CapitalFeedbackOutcome = "Worked" | "Stopped out" | "Target hit" | "Bad signal" | "Wrong instrument";
+type ConfidenceGrade = "Danger" | "Low" | "Moderate" | "High" | "Elite";
 
 function parseDollarRange(value: string | undefined) {
   if (!value) return null;
@@ -57,6 +58,14 @@ function nextThirdFriday(year: number, month: number) {
     date.setUTCDate(date.getUTCDate() + 1);
   }
   return new Date(Date.UTC(year, month + 1, 1));
+}
+
+function confidenceGrade(confidence: number): ConfidenceGrade {
+  if (confidence < 30) return "Danger";
+  if (confidence < 50) return "Low";
+  if (confidence < 70) return "Moderate";
+  if (confidence < 85) return "High";
+  return "Elite";
 }
 
 export default function IntelligenceDashboardShell({ initialData }: IntelligenceDashboardShellProps) {
@@ -206,16 +215,19 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
   const selectedPrice = selectedItem?.price ?? 0;
   const shareEntry = parseDollarRange(selectedItem?.deployment?.entryRange) ?? selectedPrice;
   const shareStop = parseDollarRange(selectedItem?.deployment?.stopRange) ?? selectedPrice * 0.93;
-  const shareTarget = parseDollarRange(selectedItem?.deployment?.targetRange) ?? selectedPrice * 1.12;
   const shareQuantity = shareEntry > 0 ? Math.max(0, Math.floor(shareCapital / shareEntry)) : 0;
   const shareUsedCapital = Number((shareQuantity * shareEntry).toFixed(2));
-  const shareProfitAtTarget = Number((shareQuantity * Math.max(0, shareTarget - shareEntry)).toFixed(2));
+  const shareUnusedCash = Number((shareCapital - shareUsedCapital).toFixed(2));
+  const shareTarget1 = parseDollarRange(selectedItem?.swing?.target1) ?? (parseDollarRange(selectedItem?.deployment?.targetRange) ?? selectedPrice * 1.12);
+  const shareTarget2 = parseDollarRange(selectedItem?.swing?.target2) ?? shareTarget1;
+  const shareProfitAtTarget1 = Number((shareQuantity * (shareTarget1 - shareEntry)).toFixed(2));
+  const shareProfitAtTarget2 = Number((shareQuantity * (shareTarget2 - shareEntry)).toFixed(2));
 
   const optionsReason = resolved?.deploymentPermission.reason ?? "Risk profile does not justify options exposure.";
-  const optionsRecommended = Boolean(
-    optionsCapital > 0 && resolved && (resolved.deploymentPermission.callsAllowed || resolved.deploymentPermission.leapsAllowed || resolved.deploymentPermission.putsAllowed),
+  const strategicOptionsPreferred = Boolean(
+    resolved && (resolved.deploymentPermission.callsAllowed || resolved.deploymentPermission.leapsAllowed || resolved.deploymentPermission.putsAllowed),
   );
-  const optionType = selectedItem?.deployment?.preferredInstrument === "Puts" ? "Puts" : "Calls";
+  const optionType = resolved?.deploymentPermission.putsAllowed ? "Puts" : "Calls";
   const optionDteDays = resolved?.deploymentPermission.leapsAllowed ? 270 : selectedItem?.macro?.volatilityState === "Expansion" ? 55 : 38;
   const optionExpiryBase = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + optionDteDays));
   const optionExpiry = nextThirdFriday(optionExpiryBase.getUTCFullYear(), optionExpiryBase.getUTCMonth());
@@ -223,10 +235,19 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
   const leapPreferred = resolved?.allocationBias === "LEAPS Preferred";
   const optionPremium = selectedPrice > 0 ? Number((selectedPrice * (leapPreferred ? 0.12 : 0.045)).toFixed(2)) : 0;
   const contractCost = optionPremium * 100;
-  const contracts = contractCost > 0 ? Math.max(0, Math.floor(optionsCapital / contractCost)) : 0;
+  const optionsExecutable = strategicOptionsPreferred && contractCost > 0 && optionsCapital >= contractCost;
+  const contracts = optionsExecutable ? Math.max(1, Math.floor(optionsCapital / contractCost)) : 0;
   const optionTotalCost = Number((contracts * contractCost).toFixed(2));
+  const optionsCashRemaining = Number((optionsCapital - optionTotalCost).toFixed(2));
   const optionStopLoss = Number((optionPremium * (leapPreferred ? 0.75 : 0.65)).toFixed(2));
   const optionProfitTarget = Number((optionPremium * (leapPreferred ? 1.8 : 1.45)).toFixed(2));
+  const optionDte = Math.max(0, Math.round((optionExpiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+  const optionLabel = optionDte >= 180 ? "LEAPS / long-dated call" : optionDte >= 30 && optionDte <= 60 ? `Swing ${optionType === "Puts" ? "Put" : "Call"}` : optionType;
+  const optionsPlanReason = strategicOptionsPreferred
+    ? `Estimated premium $${optionPremium.toFixed(2)} requires about $${contractCost.toLocaleString()} per contract. Current options allocation is $${optionsCapital.toLocaleString()}.`
+    : optionsReason;
+  const effectiveAllocationLabel = optionsExecutable ? selectedItem?.deployment?.sizingAggressiveness ?? "Starter Only" : "Shares Only";
+  const convictionGrade = confidenceGrade(resolved?.confidenceAdjusted ?? 0);
 
   const saveFeedback = useCallback((outcome: CapitalFeedbackOutcome) => {
     if (!selectedItem) return;
@@ -239,15 +260,20 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
         optionsCapital,
         sharesQty: shareQuantity,
         optionsContracts: contracts,
-        optionType: optionsRecommended ? optionType : "none",
+        optionType: optionsExecutable ? optionType : "none",
       },
       selectedTickerPrice: selectedPrice,
+      resolvedBias: resolved?.allocationBias ?? "Watch Only",
+      allocationStructure: optionsExecutable ? `${Math.round(shareRatio * 100)}% Shares + ${Math.round(optionsRatio * 100)}% ${leapPreferred ? "LEAPS" : optionType}` : "Shares Only",
+      confidence: resolved?.confidenceAdjusted ?? 0,
+      marketState: marketStatus.label,
       outcome,
     };
     const storageKey = "capital-allocation-feedback-v1";
     const existing = JSON.parse(window.localStorage.getItem(storageKey) ?? "[]") as unknown[];
     window.localStorage.setItem(storageKey, JSON.stringify([payload, ...existing].slice(0, 250)));
-  }, [contracts, optionType, optionsCapital, optionsRecommended, selectedItem, selectedPrice, shareCapital, shareQuantity]);
+    console.info("[capital-feedback]", payload);
+  }, [contracts, leapPreferred, marketStatus.label, optionType, optionsCapital, optionsExecutable, optionsRatio, resolved?.allocationBias, resolved?.confidenceAdjusted, selectedItem, selectedPrice, shareCapital, shareQuantity, shareRatio]);
 
   return (
     <main className="intel-shell">
@@ -334,7 +360,7 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
                 <div className="symbol-banner">
                   <h2>{selectedItem.symbol}</h2>
                   <div className={`status-chip ${toneClass(resolved?.primaryOpportunity)}`}>{resolved?.primaryOpportunity ?? "Neither"}</div>
-                  <p>{resolved?.battlefieldState ?? "No Edge"} • Confidence {resolved?.confidenceAdjusted ?? 0}% • {resolved?.tacticalSummary ?? selectedItem.battlefieldSummary}</p>
+                  <p>{resolved?.battlefieldState ?? "No Edge"} • Confidence {resolved?.confidenceAdjusted ?? 0}% · {convictionGrade} Conviction · {effectiveAllocationLabel} • {resolved?.tacticalSummary ?? selectedItem.battlefieldSummary}</p>
                   {resolved?.riskFlags?.length ? <div className="deployment-mix">{resolved.riskFlags.map((flag) => <span key={flag} className="inactive">{flag}</span>)}</div> : null}
                 </div>
                 <div className="grid-ops">
@@ -360,7 +386,7 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
                   <article className="glass-card card-macro"><h3>Macro Terrain <InfoHelp title="Macro Terrain" content="Classifies risk-on/risk-off context, volatility compression/expansion, and sector pressure. Macro modifies deployment aggressiveness: favorable terrain allows size; hostile terrain requires tighter risk posture." /></h3><div className={`terrain-banner ${toneClass(selectedItem.macro?.terrain)}`}>{selectedItem.macro?.terrain ?? "Unknown"}</div><div className="metric-row"><span>Volatility</span><strong>{selectedItem.macro?.volatilityState ?? "-"}</strong></div><div className="metric-row"><span>Condition</span><strong>{selectedItem.macro?.sectorPressure ?? "-"}</strong></div><div className="metric-row"><span>Sentiment</span><strong>{selectedItem.sentiment?.sentimentState ?? "-"}</strong></div></article>
 
                   <article className="glass-card card-deploy"><h3>Deployment Panel <InfoHelp title="Deployment Panel" content="Explains why shares vs calls vs puts vs LEAPS are selected and how aggressiveness shifts from starter-only to full-size. Confidence blends swing quality, long-term structure, macro terrain, and whale trap risk." /></h3><div className="deployment-mix">{instrumentMix(selectedItem.deployment).map((slot) => <span key={slot.label} className={slot.on ? "active" : "inactive"}>{slot.label}</span>)}</div><div className="metric-row"><span>Aggressiveness</span><strong>{selectedItem.deployment?.sizingAggressiveness ?? "-"}</strong></div><div className="meter"><i style={{ width: `${aggressivePct}%` }} /></div><div className="entry-map"><div><label>Entry</label><b>{selectedItem.deployment?.entryRange ?? "-"}</b></div><div><label>Stop</label><b>{selectedItem.deployment?.stopRange ?? "-"}</b></div><div><label>Target</label><b>{selectedItem.deployment?.targetRange ?? "-"}</b></div><div><label>Return Band</label><b>{selectedItem.deployment?.estimatedReturn ?? "-"}</b></div></div></article>
-                  <article className="glass-card card-capital"><h3>Capital Allocation Engine <InfoHelp title="Capital Allocation Engine" content="Translates battlefield probability into deployable capital structure. Bullish setup can support hybrid shares+options. Neutral favors starter size. Dangerous suppresses options and preserves cash." /></h3><div className="metric-row"><span>Total Capital</span><input className="capital-input" value={capitalInput} onChange={(event) => setCapitalInput(event.target.value)} /></div><div className="entry-map"><div><label>Shares Plan</label><b>${shareUsedCapital.toLocaleString()} • {shareQuantity} shares</b></div><div><label>Entry / Stop</label><b>${shareEntry.toFixed(2)} / ${shareStop.toFixed(2)}</b></div><div><label>Target</label><b>${shareTarget.toFixed(2)} (Est. Profit ${shareProfitAtTarget.toLocaleString()})</b></div><div><label>Structure</label><b>{optionsCapital > 0 ? `${Math.round(shareRatio * 100)}% Shares + ${Math.round(optionsRatio * 100)}% ${resolved?.allocationBias === "LEAPS Preferred" ? "LEAPS" : "Calls"}` : "100% Shares"}</b></div><div><label>Market State</label><b>{marketStatus.label} • {now.toUTCString()}</b></div><div><label>Options Plan</label><b>{optionsRecommended ? `${optionType} ${optionExpiry.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })} $${optionStrike} @ ~$${optionPremium}` : `Options not recommended because: ${optionsReason}`}</b></div>{optionsRecommended ? <><div><label>Contracts / Cost</label><b>{contracts} contracts • ${optionTotalCost.toLocaleString()}</b></div><div><label>Option Stop / Target</label><b>${optionStopLoss.toFixed(2)} / ${optionProfitTarget.toFixed(2)}</b></div></> : null}<div><label>Resolved Bias</label><b>{resolved?.allocationBias ?? "Watch Only"} • {resolved?.confidenceAdjusted ?? 0}%</b></div></div><div className="deployment-mix"><button type="button" onClick={() => saveFeedback("This worked")}>This worked</button><button type="button" onClick={() => saveFeedback("Stopped out")}>Stopped out</button><button type="button" onClick={() => saveFeedback("Target hit")}>Target hit</button><button type="button" onClick={() => saveFeedback("Bad signal")}>Bad signal</button><button type="button" onClick={() => saveFeedback("Wrong instrument")}>Wrong instrument</button></div></article>
+                  <article className="glass-card card-capital"><h3>Capital Allocation Engine <InfoHelp title="Capital Allocation Engine" content="Translates battlefield probability into deployable capital structure. Bullish setup can support hybrid shares+options. Neutral favors starter size. Dangerous suppresses options and preserves cash." /></h3><div className="metric-row"><span>Total Capital</span><input className="capital-input" value={capitalInput} onChange={(event) => setCapitalInput(event.target.value)} /></div><div className="entry-map"><div><label>Shares Plan</label><b>${shareUsedCapital.toLocaleString()} • {shareQuantity} shares</b></div><div><label>Entry / Stop</label><b>${shareEntry.toFixed(2)} / ${shareStop.toFixed(2)}</b></div><div><label>T1 / T2 Profit</label><b>${shareProfitAtTarget1.toLocaleString()} / ${shareProfitAtTarget2.toLocaleString()}</b></div><div><label>Unused Share Cash</label><b>${shareUnusedCash.toLocaleString()}</b></div><div><label>Structure</label><b>{optionsExecutable ? `${Math.round(shareRatio * 100)}% Shares + ${Math.round(optionsRatio * 100)}% ${leapPreferred ? "LEAPS" : optionType}` : "Shares Only (options not executable)"}</b></div><div><label>Market State</label><b>{marketStatus.label} • {now.toUTCString()}</b></div><div><label>Options Plan</label><b>{optionsExecutable ? `${optionLabel} ${optionExpiry.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })} $${optionStrike} @ ~$${optionPremium}` : "Not executable"}</b></div>{optionsExecutable ? <><div><label>Contracts / Cost</label><b>{contracts} contracts • ${optionTotalCost.toLocaleString()}</b></div><div><label>Remaining Options Cash</label><b>${optionsCashRemaining.toLocaleString()}</b></div><div><label>Option Stop / Target</label><b>${optionStopLoss.toFixed(2)} / ${optionProfitTarget.toFixed(2)}</b></div></> : <><div><label>Reason</label><b>{optionsPlanReason}</b></div><div><label>Required capital for 1 contract</label><b>${contractCost.toLocaleString()}</b></div></>}<div><label>Strategic Bias</label><b>{resolved?.allocationBias ?? "Watch Only"} • {resolved?.confidenceAdjusted ?? 0}%</b></div><div><label>Executable Deployment</label><b>{effectiveAllocationLabel}</b></div></div><div className="feedback-buttons"><button type="button" onClick={() => saveFeedback("Worked")}>Worked</button><button type="button" onClick={() => saveFeedback("Stopped out")}>Stopped Out</button><button type="button" onClick={() => saveFeedback("Target hit")}>Target Hit</button><button type="button" onClick={() => saveFeedback("Bad signal")}>Bad Signal</button><button type="button" onClick={() => saveFeedback("Wrong instrument")}>Wrong Instrument</button></div></article>
                 </div>
               </section>
             )}

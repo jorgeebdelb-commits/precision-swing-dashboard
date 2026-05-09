@@ -150,6 +150,9 @@ body {
 .market-pre { border-color: rgba(234, 179, 8, 0.45); }
 .market-after, .market-weekend { border-color: rgba(148, 163, 184, 0.35); }
 .capital-input { width: 120px; background: rgba(2, 6, 23, 0.5); border: 1px solid rgba(148, 163, 184, 0.25); color: #e2e8f0; border-radius: 8px; padding: 0.3rem 0.45rem; font-size: 0.8rem; text-align: right; }
+.feedback-buttons { display: flex; gap: 0.35rem; flex-wrap: wrap; margin-top: 0.55rem; }
+.feedback-buttons button { border: 1px solid rgba(148, 163, 184, 0.35); background: rgba(2, 6, 23, 0.6); color: #cbd5e1; border-radius: 999px; padding: 0.24rem 0.52rem; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.feedback-buttons button:hover { border-color: rgba(56, 189, 248, 0.7); color: #e0f2fe; }
 @media (max-width: 1100px) { .intel-layout { grid-template-columns: 1fr; } .watchlist-panel { position: static; } }
 @media (max-width: 900px) {
   .grid-ops { grid-template-columns: 1fr; }
