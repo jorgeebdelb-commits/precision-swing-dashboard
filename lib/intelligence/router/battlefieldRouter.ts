@@ -2,6 +2,7 @@ import type { NormalizedSymbolInput } from "@/lib/intelligence/adapters/normaliz
 import { runLongEngine } from "@/lib/intelligence/core/longEngine";
 import { runSwingEngine } from "@/lib/intelligence/core/swingEngine";
 import { buildCapitalDeployment } from "@/lib/intelligence/deployment/capitalDeployment";
+import { resolveBattlefieldState } from "@/lib/intelligence/resolver/battlefieldStateResolver";
 import { runMacroModule } from "@/lib/intelligence/support/macroModule";
 import { runPoliticsModule } from "@/lib/intelligence/support/politicsModule";
 import { runSentimentModule } from "@/lib/intelligence/support/sentimentModule";
@@ -9,7 +10,6 @@ import { runWhaleModule } from "@/lib/intelligence/support/whaleModule";
 import type { BattlefieldOutput } from "@/lib/intelligence/types/battlefield";
 
 export function routeBattlefield(input: NormalizedSymbolInput): BattlefieldOutput {
-  console.log("[battlefieldRouter] input symbol:", input.symbol);
   const swing = runSwingEngine(input);
   const longTerm = runLongEngine(input);
   const whale = runWhaleModule(input);
@@ -17,14 +17,13 @@ export function routeBattlefield(input: NormalizedSymbolInput): BattlefieldOutpu
   const politics = runPoliticsModule(input);
   const sentiment = runSentimentModule(input);
   const deployment = buildCapitalDeployment(swing, longTerm, whale, macro, sentiment);
-  const primaryOpportunity: BattlefieldOutput["primaryOpportunity"] = swing.bias === "Swing Buy" && (longTerm.bias === "Long Buy" || longTerm.bias === "LEAP Candidate") ? "Both" : swing.bias === "Swing Buy" ? "Swing" : longTerm.bias === "Long Buy" || longTerm.bias === "Shares Preferred" ? "Long-Term" : "Neither";
-  const warnings = [whale.trapRisk === "High" ? "High Trap Risk" : "", macro.terrain === "Risk-Off" ? "Risk-Off terrain: reduce aggressiveness" : "", sentiment.sentimentState === "Hype Risk" ? "Hype risk: avoid chasing calls" : ""].filter(Boolean);
-  const output = { symbol: input.symbol, price: input.price, priceTimestamp: input.priceTimestamp ?? null, marketDataState: input.marketDataState ?? "offline", staleData: input.staleData ?? true, marketDataProvider: input.quoteProvider ?? "Unknown", lastQuoteSuccessAt: input.lastQuoteSuccessAt ?? null, lastQuoteError: input.lastQuoteError ?? null, providerLatencyMs: input.providerLatencyMs ?? null, quoteRetryCount: input.quoteRetryCount ?? 0, staleAgeSeconds: input.staleAgeSeconds ?? null, quoteQuotaStatus: input.quoteQuotaStatus ?? null, swing, longTerm, whale, macro, politics, sentiment, battlefieldSummary: `${input.symbol}: ${primaryOpportunity} opportunity with ${warnings.length ? "active warnings" : "balanced conditions"}.`, primaryOpportunity, warnings, confidenceAdjustment: Math.round((macro.aggressivenessModifier * 10 - (whale.trapRisk === "High" ? 12 : 0))), deployment };
-  console.log("[battlefieldRouter] output summary:", {
-    symbol: output.symbol,
-    swingBias: output.swing.bias,
-    longBias: output.longTerm.bias,
-    primaryOpportunity: output.primaryOpportunity,
-  });
-  return output;
+  const resolved = resolveBattlefieldState({ symbol: input.symbol, swing, longTerm, whale, macro, politics, sentiment });
+
+  return {
+    symbol: input.symbol, price: input.price, priceTimestamp: input.priceTimestamp ?? null, marketDataState: input.marketDataState ?? "offline", staleData: input.staleData ?? true,
+    marketDataProvider: input.quoteProvider ?? "Unknown", lastQuoteSuccessAt: input.lastQuoteSuccessAt ?? null, lastQuoteError: input.lastQuoteError ?? null, providerLatencyMs: input.providerLatencyMs ?? null,
+    quoteRetryCount: input.quoteRetryCount ?? 0, staleAgeSeconds: input.staleAgeSeconds ?? null, quoteQuotaStatus: input.quoteQuotaStatus ?? null, quoteIntegrityScore: input.quoteIntegrityScore ?? 0, quoteSuspect: input.quoteSuspect ?? false,
+    swing, longTerm, whale, macro, politics, sentiment, battlefieldSummary: `${input.symbol}: ${resolved.primaryOpportunity} setup in ${resolved.battlefieldState}.`, primaryOpportunity: resolved.primaryOpportunity,
+    warnings: resolved.riskFlags, confidenceAdjustment: resolved.confidenceAdjusted, deployment, signalAttribution: resolved.signalAttribution, tradeOutcome: null,
+  };
 }
