@@ -10,6 +10,7 @@ interface FallbackSnapshotParams {
 export function createFallbackSnapshot(params: FallbackSnapshotParams): LiveMarketSnapshot {
   return {
     symbol: params.symbol,
+    provider: "offline",
     price: null,
     bid: null,
     ask: null,
