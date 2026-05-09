@@ -28,13 +28,14 @@ const supportsWeakness = (terrain: MarketTerrain) => terrain === "Risk-Off" || t
 export function resolveBattlefieldState(input: Pick<BattlefieldOutput, "symbol" | "price" | "swing" | "longTerm" | "whale" | "macro" | "politics" | "sentiment" | "deployment">): ResolvedBattlefieldState {
   const riskFlags: string[] = [];
   const trapRisk = input.whale.trapRisk;
+  const highTrapRisk = trapRisk === "High";
   const terrain = input.macro.terrain;
   const politicalHostile = input.politics.politicalRisk === "High" || input.politics.regulatoryRisk === "High";
   const hypeRisk = input.sentiment.sentimentState === "Hype Risk";
 
   const swingSignal = input.swing.bias === "Swing Buy" || input.swing.bias === "Swing Put Opportunity";
   const swingConfidenceOk = input.swing.confidence >= 55;
-  const swingValid = swingSignal && swingConfidenceOk && !isHostileTerrain(terrain) && trapRisk !== "High";
+  const swingValid = swingSignal && swingConfidenceOk && !isHostileTerrain(terrain) && !highTrapRisk;
 
   const longBiasValid = ["Long Buy", "Shares Preferred", "LEAP Candidate"].includes(input.longTerm.bias);
   const longQualityValid = input.longTerm.longTermQuality === "Moderate" || input.longTerm.longTermQuality === "Strong";
@@ -46,7 +47,7 @@ export function resolveBattlefieldState(input: Pick<BattlefieldOutput, "symbol" 
   else if (longValid) primaryOpportunity = "Long-Term";
 
   let confidence = Math.max(input.swing.confidence, input.longTerm.confidence);
-  if (trapRisk === "High") confidence -= 20;
+  if (highTrapRisk) confidence -= 20;
   if (trapRisk === "Moderate") confidence -= 10;
   if (hypeRisk) confidence -= 15;
   if (terrain === "Choppy Market") confidence -= 10;
@@ -57,13 +58,13 @@ export function resolveBattlefieldState(input: Pick<BattlefieldOutput, "symbol" 
   if (trapRisk === "Low") confidence += 5;
   const confidenceAdjusted = clamp(confidence);
 
-  if (trapRisk === "High") riskFlags.push("Elevated trap risk — avoid chasing momentum.");
+  if (highTrapRisk) riskFlags.push("Elevated trap risk — avoid chasing momentum.");
   if (hypeRisk) riskFlags.push("Crowding/hype risk detected.");
   if (terrain === "Choppy Market") riskFlags.push("Choppy market — reduce position size.");
   if (terrain === "Risk-Off" || terrain === "Unstable Ground") riskFlags.push("Risk-off regime — aggressive deployment restricted.");
   if (politicalHostile) riskFlags.push("High political/regulatory risk present.");
 
-  const callsAllowed = swingValid && trapRisk !== "High" && !hypeRisk && !isHostileTerrain(terrain) && terrain !== "Choppy Market";
+  const callsAllowed = swingValid && !highTrapRisk && !hypeRisk && !isHostileTerrain(terrain) && terrain !== "Choppy Market";
   const putsAllowed = input.swing.bias === "Swing Put Opportunity" || (input.swing.breakoutQuality === "Failed" && supportsWeakness(terrain));
   const leapsAllowed = (input.longTerm.bias === "LEAP Candidate" || input.longTerm.longTermQuality === "Strong") && input.longTerm.confidence >= 65;
   const sharesAllowed = longValid || swingValid;
@@ -71,8 +72,8 @@ export function resolveBattlefieldState(input: Pick<BattlefieldOutput, "symbol" 
   let allocationBias: AllocationBias = "Watch Only";
   if (primaryOpportunity === "Both") allocationBias = callsAllowed ? "Calls Allowed" : "Shares Preferred";
   if (primaryOpportunity === "Long-Term") allocationBias = leapsAllowed ? "LEAPS Preferred" : "Shares Preferred";
-  if (primaryOpportunity === "Swing") allocationBias = callsAllowed ? "Calls Allowed" : trapRisk === "High" ? "Starter Only" : "Shares Preferred";
-  if (primaryOpportunity === "Neither") allocationBias = isHostileTerrain(terrain) || trapRisk === "High" ? "Watch Only" : "Starter Only";
+  if (primaryOpportunity === "Swing") allocationBias = callsAllowed ? "Calls Allowed" : highTrapRisk ? "Starter Only" : "Shares Preferred";
+  if (primaryOpportunity === "Neither") allocationBias = isHostileTerrain(terrain) || highTrapRisk ? "Watch Only" : "Starter Only";
   if (hypeRisk && allocationBias === "Calls Allowed") allocationBias = "Starter Only";
 
   let tacticalSummary = "No clear directional edge; remain selective and capital-preserving.";
@@ -85,7 +86,7 @@ export function resolveBattlefieldState(input: Pick<BattlefieldOutput, "symbol" 
     tacticalSummary = "Swing and long-term structure align; deploy with measured risk.";
   }
 
-  const battlefieldState: BattlefieldState = trapRisk === "High"
+  const battlefieldState: BattlefieldState = highTrapRisk
     ? "Trap-Prone Momentum"
     : isHostileTerrain(terrain)
       ? "High-Risk Expansion"
