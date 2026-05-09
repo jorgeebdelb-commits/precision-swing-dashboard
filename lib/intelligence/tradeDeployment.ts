@@ -68,6 +68,67 @@ export type TradeDeployment = {
   warnings: string[];
 };
 
+const unavailableBattlefieldPricing: TradeDeployment = {
+  symbol: "N/A",
+  horizon: "Swing",
+  bias: "Neutral",
+  recommendation: "Unavailable",
+  strategy: "No Trade",
+  conviction: "Low",
+  currentPrice: 0,
+  capitalToDeploy: 0,
+  capitalUsed: 0,
+  sharesPlan: {
+    action: "Unavailable",
+    quantity: 0,
+    entryPrice: 0,
+    capitalUsed: 0,
+  },
+  optionsPlan: {
+    action: "Unavailable",
+    contractType: "None",
+    strike: null,
+    expiration: null,
+    contracts: 0,
+    estimatedPremium: 0,
+    capitalUsed: 0,
+    rationale: "Awaiting live market data",
+  },
+  entryPlan: {
+    starterEntry: null,
+    addZone: "Unavailable",
+    breakoutAdd: "Awaiting live market data",
+  },
+  profitTargets: {
+    target1Price: null,
+    target1Action: "Unavailable",
+    target2Price: null,
+    target2Action: "Unavailable",
+    runnerPlan: "Market pricing offline",
+  },
+  riskManagement: {
+    stopLossPrice: null,
+    invalidationLevel: "Unavailable",
+    maxDollarRisk: 0,
+    maxPercentRisk: 0,
+    optionStopPercent: 0,
+  },
+  expectedReturn: {
+    minimumTargetPercent: 0,
+    realisticTargetPercent: 0,
+    optimizedUpsidePercent: 0,
+  },
+  tradeQuality: {
+    technicals: 0,
+    momentum: 0,
+    sentiment: 0,
+    macro: 0,
+    options: 0,
+    overall: 0,
+  },
+  warnings: ["Market pricing offline", "Awaiting live market data"],
+};
+
 const toBias = (analysis: RowMetrics): TradeBias => {
   const rec = analysis.recommendation.toLowerCase();
   if (rec.includes("sell") || rec.includes("bear") || analysis.swingSignal === "Sell") return "Bearish";
@@ -98,9 +159,19 @@ export function generateTradeDeployment({
   strategyType: StrategyType;
 }): TradeDeployment | null {
   if (!selectedTicker || !selectedAnalysis || capitalToDeploy <= 0) return null;
+  const livePrice = Number(selectedTicker.price);
+  if (!livePrice || livePrice <= 0) {
+    return {
+      ...unavailableBattlefieldPricing,
+      symbol: selectedTicker.symbol,
+      horizon,
+      capitalToDeploy,
+      warnings: [...unavailableBattlefieldPricing.warnings],
+    };
+  }
 
   const warnings: string[] = [];
-  const currentPrice = Math.max(0.01, Number(selectedTicker.price) || 0.01);
+  const currentPrice = livePrice;
   const support = Number(selectedTicker.support) || currentPrice * 0.96;
   const resistance = Number(selectedTicker.resistance) || currentPrice * 1.08;
   const atrPct = Number((selectedTicker as unknown as { atrPct?: number }).atrPct) || 2.8;
