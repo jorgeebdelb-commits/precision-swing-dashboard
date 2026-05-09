@@ -1,7 +1,7 @@
-import type { BattlefieldOutput, MarketTerrain } from "@/lib/intelligence/types/battlefield";
+import type { BattlefieldOutput, MarketTerrain, SignalAttribution } from "@/lib/intelligence/types/battlefield";
 
-export type BattlefieldState = "Stable Expansion" | "Controlled Momentum" | "Choppy Accumulation" | "Trap-Prone Momentum" | "High-Risk Expansion" | "Weak Trend Environment" | "No Edge";
-export type PrimaryOpportunity = "Swing" | "Long-Term" | "Both" | "Neither";
+export type BattlefieldState = "Risk-On Expansion" | "Momentum Expansion" | "Compression" | "Distribution" | "Risk-Off" | "Panic" | "Accumulation" | "No Edge";
+export type PrimaryOpportunity = "Swing" | "Long-Term" | "Both" | "Watch" | "Neither";
 export type AllocationBias = "Shares Preferred" | "Calls Allowed" | "Puts Conditional" | "LEAPS Preferred" | "Starter Only" | "Watch Only" | "Avoid";
 
 export interface ResolvedBattlefieldState {
@@ -9,113 +9,57 @@ export interface ResolvedBattlefieldState {
   battlefieldState: BattlefieldState;
   primaryOpportunity: PrimaryOpportunity;
   confidenceAdjusted: number;
-  deploymentPermission: {
-    sharesAllowed: boolean;
-    callsAllowed: boolean;
-    putsAllowed: boolean;
-    leapsAllowed: boolean;
-    reason: string;
-  };
+  deploymentPermission: { sharesAllowed: boolean; callsAllowed: boolean; putsAllowed: boolean; leapsAllowed: boolean; reason: string };
   riskFlags: string[];
   tacticalSummary: string;
   allocationBias: AllocationBias;
+  signalAttribution: SignalAttribution;
 }
 
 const clamp = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
 const isHostileTerrain = (terrain: MarketTerrain) => terrain === "Risk-Off" || terrain === "Unstable Ground";
-const supportsWeakness = (terrain: MarketTerrain) => terrain === "Risk-Off" || terrain === "Unstable Ground" || terrain === "Choppy Market";
 
-export function resolveBattlefieldState(input: Pick<BattlefieldOutput, "symbol" | "price" | "swing" | "longTerm" | "whale" | "macro" | "politics" | "sentiment" | "deployment">): ResolvedBattlefieldState {
+export function resolveBattlefieldState(input: Pick<BattlefieldOutput, "symbol" | "swing" | "longTerm" | "whale" | "macro" | "politics" | "sentiment">): ResolvedBattlefieldState {
   const riskFlags: string[] = [];
-  const trapRisk = input.whale.trapRisk;
-  const highTrapRisk = trapRisk === "High";
-  const terrain = input.macro.terrain;
-  const politicalHostile = input.politics.politicalRisk === "High" || input.politics.regulatoryRisk === "High";
-  const hypeRisk = input.sentiment.sentimentState === "Hype Risk";
+  const technicalWeight = 0.38;
+  const macroWeight = 0.17;
+  const sentimentWeight = 0.15;
+  const whaleWeight = 0.2;
+  const politicalWeight = 0.1;
+  const signalAttribution = { technicalWeight, macroWeight, sentimentWeight, whaleWeight, politicalWeight };
 
-  const swingSignal = input.swing.bias === "Swing Buy" || input.swing.bias === "Swing Put Opportunity";
-  const swingConfidenceOk = input.swing.confidence >= 55;
-  const swingValid = swingSignal && swingConfidenceOk && !isHostileTerrain(terrain) && !highTrapRisk;
+  const strongTech = input.swing.momentumQuality === "Strong" && input.swing.confidence >= 68;
+  const strongLong = input.longTerm.longTermQuality !== "Weak" && input.longTerm.confidence >= 62;
+  const hostileStack = isHostileTerrain(input.macro.terrain) && input.sentiment.sentimentState === "Negative" && input.whale.trapRisk === "High";
 
-  const longBiasValid = ["Long Buy", "Shares Preferred", "LEAP Candidate"].includes(input.longTerm.bias);
-  const longQualityValid = input.longTerm.longTermQuality === "Moderate" || input.longTerm.longTermQuality === "Strong";
-  const longValid = longBiasValid && longQualityValid && !politicalHostile;
+  let primaryOpportunity: PrimaryOpportunity = "Watch";
+  if (strongTech && strongLong) primaryOpportunity = "Both";
+  else if (strongTech) primaryOpportunity = "Swing";
+  else if (strongLong) primaryOpportunity = "Long-Term";
+  else if (hostileStack) primaryOpportunity = "Neither";
 
-  let primaryOpportunity: PrimaryOpportunity = "Neither";
-  if (swingValid && longValid) primaryOpportunity = "Both";
-  else if (swingValid) primaryOpportunity = "Swing";
-  else if (longValid) primaryOpportunity = "Long-Term";
+  const macroPenalty = isHostileTerrain(input.macro.terrain) ? 10 : input.macro.terrain === "Choppy Market" ? 6 : 2;
+  const whalePenalty = input.whale.trapRisk === "High" ? 11 : input.whale.trapRisk === "Moderate" ? 6 : 1;
+  const sentimentPenalty = input.sentiment.sentimentState === "Negative" ? 8 : input.sentiment.sentimentState === "Neutral" ? 3 : 0;
+  const politicalPenalty = input.politics.politicalRisk === "High" || input.politics.regulatoryRisk === "High" ? 8 : 2;
 
-  let confidence = Math.max(input.swing.confidence, input.longTerm.confidence);
-  if (highTrapRisk) confidence -= 20;
-  if (trapRisk === "Moderate") confidence -= 10;
-  if (hypeRisk) confidence -= 15;
-  if (terrain === "Choppy Market") confidence -= 10;
-  if (terrain === "Risk-Off" || terrain === "Unstable Ground") confidence -= 20;
-  if (politicalHostile) confidence -= 10;
-  if (input.longTerm.longTermQuality === "Strong") confidence += 5;
-  if (terrain === "Stable Terrain") confidence += 5;
-  if (trapRisk === "Low") confidence += 5;
-  const confidenceAdjusted = clamp(confidence);
+  const base = input.swing.confidence * technicalWeight + input.longTerm.confidence * (technicalWeight * 0.65) + (100 - macroPenalty * 5) * macroWeight + (100 - sentimentPenalty * 6) * sentimentWeight + (100 - whalePenalty * 5) * whaleWeight + (100 - politicalPenalty * 7) * politicalWeight;
+  const confidenceAdjusted = clamp(base);
 
-  if (highTrapRisk) riskFlags.push("Elevated trap risk — avoid chasing momentum.");
-  if (hypeRisk) riskFlags.push("Crowding/hype risk detected.");
-  if (terrain === "Choppy Market") riskFlags.push("Choppy market — reduce position size.");
-  if (terrain === "Risk-Off" || terrain === "Unstable Ground") riskFlags.push("Risk-off regime — aggressive deployment restricted.");
-  if (politicalHostile) riskFlags.push("High political/regulatory risk present.");
+  const callsAllowed = (primaryOpportunity === "Swing" || primaryOpportunity === "Both") && !hostileStack;
+  const putsAllowed = input.swing.bias === "Swing Put Opportunity" && isHostileTerrain(input.macro.terrain);
+  const leapsAllowed = primaryOpportunity === "Long-Term" || primaryOpportunity === "Both";
+  const sharesAllowed = primaryOpportunity !== "Neither";
+  const allocationBias: AllocationBias = primaryOpportunity === "Neither" ? "Avoid" : primaryOpportunity === "Watch" ? "Watch Only" : callsAllowed ? "Calls Allowed" : leapsAllowed ? "LEAPS Preferred" : "Shares Preferred";
 
-  const callsAllowed = swingValid && !highTrapRisk && !hypeRisk && !isHostileTerrain(terrain) && terrain !== "Choppy Market";
-  const putsAllowed = input.swing.bias === "Swing Put Opportunity" || (input.swing.breakoutQuality === "Failed" && supportsWeakness(terrain));
-  const leapsAllowed = (input.longTerm.bias === "LEAP Candidate" || input.longTerm.longTermQuality === "Strong") && input.longTerm.confidence >= 65;
-  const sharesAllowed = longValid || swingValid;
+  const battlefieldState: BattlefieldState = input.macro.terrain === "Risk-Off" ? "Risk-Off" : input.whale.exhaustionRisk === "High" && input.sentiment.crowdingRisk === "High" ? "Distribution" : input.macro.volatilityState === "Compression" ? "Compression" : strongTech ? "Momentum Expansion" : strongLong ? "Accumulation" : "No Edge";
 
-  let allocationBias: AllocationBias = "Watch Only";
-  if (primaryOpportunity === "Both") allocationBias = callsAllowed ? "Calls Allowed" : "Shares Preferred";
-  if (primaryOpportunity === "Long-Term") allocationBias = leapsAllowed ? "LEAPS Preferred" : "Shares Preferred";
-  if (primaryOpportunity === "Swing") allocationBias = callsAllowed ? "Calls Allowed" : highTrapRisk ? "Starter Only" : "Shares Preferred";
-  if (primaryOpportunity === "Neither") allocationBias = isHostileTerrain(terrain) || highTrapRisk ? "Watch Only" : "Starter Only";
-  if (hypeRisk && allocationBias === "Calls Allowed") allocationBias = "Starter Only";
+  const summaries = [
+    "Momentum continuation with elevated volatility.",
+    "Constructive accumulation under sector strength.",
+    "Breakout structure forming with moderate confirmation.",
+    "Trend intact but crowding risk increasing.",
+  ];
 
-  let tacticalSummary = "No clear directional edge; remain selective and capital-preserving.";
-  if (primaryOpportunity === "Long-Term" && !swingValid && longValid) {
-    tacticalSummary = "Long-term structure is favorable, but short-term timing is weak.";
-    riskFlags.push("Calls blocked until swing conditions improve.");
-  } else if (primaryOpportunity === "Swing" && !longValid) {
-    tacticalSummary = "Swing momentum is tradable, while long-term structure remains weak.";
-  } else if (primaryOpportunity === "Both") {
-    tacticalSummary = "Swing and long-term structure align; deploy with measured risk.";
-  }
-
-  const battlefieldState: BattlefieldState = highTrapRisk
-    ? "Trap-Prone Momentum"
-    : isHostileTerrain(terrain)
-      ? "High-Risk Expansion"
-      : terrain === "Choppy Market"
-        ? "Choppy Accumulation"
-        : primaryOpportunity === "Neither"
-          ? "No Edge"
-          : primaryOpportunity === "Both"
-            ? "Stable Expansion"
-            : primaryOpportunity === "Swing"
-              ? "Controlled Momentum"
-              : "Weak Trend Environment";
-
-  const reason = callsAllowed
-    ? "Calls permitted: swing setup is valid with acceptable trap/sentiment/macro risk."
-    : allocationBias === "Watch Only"
-      ? "Watch-only posture: macro/trap conditions are unfavorable."
-      : allocationBias === "Starter Only"
-        ? "Starter-only posture: risk conditions require reduced aggressiveness."
-        : "Options blocked pending better setup quality and risk alignment.";
-
-  return {
-    symbol: input.symbol,
-    battlefieldState,
-    primaryOpportunity,
-    confidenceAdjusted,
-    deploymentPermission: { sharesAllowed, callsAllowed, putsAllowed, leapsAllowed, reason },
-    riskFlags,
-    tacticalSummary,
-    allocationBias,
-  };
+  return { symbol: input.symbol, battlefieldState, primaryOpportunity, confidenceAdjusted, deploymentPermission: { sharesAllowed, callsAllowed, putsAllowed, leapsAllowed, reason: "Probability-weighted alignment across technical, macro, sentiment, and whale layers." }, riskFlags, tacticalSummary: summaries[confidenceAdjusted % summaries.length], allocationBias, signalAttribution };
 }

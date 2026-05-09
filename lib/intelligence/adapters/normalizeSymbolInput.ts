@@ -13,6 +13,8 @@ export interface NormalizedSymbolInput {
   quoteRetryCount?: number | null;
   staleAgeSeconds?: number | null;
   quoteQuotaStatus?: string | null;
+  quoteIntegrityScore?: number;
+  quoteSuspect?: boolean;
   technicalScore: number;
   fundamentalsScore: number;
   macroScore: number;
@@ -52,6 +54,8 @@ export function normalizeSymbolInput(input: RawSymbolInput): NormalizedSymbolInp
     quoteRetryCount: safeNumber(input.quoteRetryCount),
     staleAgeSeconds: safeNumber(input.staleAgeSeconds, null),
     quoteQuotaStatus: typeof input.quoteQuotaStatus === "string" ? input.quoteQuotaStatus : null,
+    quoteIntegrityScore: safeNumber(input.quoteIntegrityScore),
+    quoteSuspect: Boolean(input.quoteSuspect),
     technicalScore: safeNumber(input.technicalScore),
     fundamentalsScore: safeNumber(input.fundamentalsScore),
     macroScore: safeNumber(input.macroScore),
