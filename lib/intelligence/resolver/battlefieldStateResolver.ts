@@ -1,7 +1,7 @@
 import type { BattlefieldOutput, MarketTerrain, SignalAttribution } from "@/lib/intelligence/types/battlefield";
 
 export type BattlefieldState = "Risk-On Expansion" | "Momentum Expansion" | "Compression" | "Distribution" | "Risk-Off" | "Panic" | "Accumulation" | "No Edge";
-export type PrimaryOpportunity = "Swing" | "Long-Term" | "Both" | "Watch" | "Neither";
+export type PrimaryOpportunity = "Swing" | "Institutional Accumulation" | "Tactical Long" | "Both" | "Watch" | "Neither";
 export type AllocationBias = "Shares Preferred" | "Calls Allowed" | "Puts Conditional" | "LEAPS Preferred" | "Starter Only" | "Watch Only" | "Avoid";
 
 export interface ResolvedBattlefieldState {
@@ -35,7 +35,7 @@ export function resolveBattlefieldState(input: Pick<BattlefieldOutput, "symbol" 
   let primaryOpportunity: PrimaryOpportunity = "Watch";
   if (strongTech && strongLong) primaryOpportunity = "Both";
   else if (strongTech) primaryOpportunity = "Swing";
-  else if (strongLong) primaryOpportunity = "Long-Term";
+  else if (strongLong) primaryOpportunity = input.longTerm.longDurationClass === "Institutional Accumulation" ? "Institutional Accumulation" : "Tactical Long";
   else if (hostileStack) primaryOpportunity = "Neither";
 
   const macroPenalty = isHostileTerrain(input.macro.terrain) ? 10 : input.macro.terrain === "Choppy Market" ? 6 : 2;
@@ -44,11 +44,12 @@ export function resolveBattlefieldState(input: Pick<BattlefieldOutput, "symbol" 
   const politicalPenalty = input.politics.politicalRisk === "High" || input.politics.regulatoryRisk === "High" ? 8 : 2;
 
   const base = input.swing.confidence * technicalWeight + input.longTerm.confidence * (technicalWeight * 0.65) + (100 - macroPenalty * 5) * macroWeight + (100 - sentimentPenalty * 6) * sentimentWeight + (100 - whalePenalty * 5) * whaleWeight + (100 - politicalPenalty * 7) * politicalWeight;
-  const confidenceAdjusted = clamp(base);
+  const longTermPenalty = input.longTerm.speculativeRiskScore >= 70 ? 9 : input.longTerm.speculativeRiskScore >= 55 ? 4 : 0;
+  const confidenceAdjusted = Math.min(88, clamp(base - longTermPenalty));
 
   const callsAllowed = (primaryOpportunity === "Swing" || primaryOpportunity === "Both") && !hostileStack;
   const putsAllowed = input.swing.bias === "Swing Put Opportunity" && isHostileTerrain(input.macro.terrain);
-  const leapsAllowed = primaryOpportunity === "Long-Term" || primaryOpportunity === "Both";
+  const leapsAllowed = (primaryOpportunity === "Institutional Accumulation" || primaryOpportunity === "Both") && input.longTerm.speculativeRiskScore < 68;
   const sharesAllowed = primaryOpportunity !== "Neither";
   const allocationBias: AllocationBias = primaryOpportunity === "Neither" ? "Avoid" : primaryOpportunity === "Watch" ? "Watch Only" : callsAllowed ? "Calls Allowed" : leapsAllowed ? "LEAPS Preferred" : "Shares Preferred";
 
