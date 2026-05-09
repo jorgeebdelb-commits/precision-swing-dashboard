@@ -213,7 +213,7 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
   }, []);
   const now = new Date();
   const selectedPrice = typeof selectedItem?.price === "number" ? selectedItem.price : 0;
-  const liveUnavailable = !(typeof selectedItem?.price === "number" && selectedItem.price > 0);
+  const liveUnavailable = selectedItem?.marketDataState === "offline" || !(typeof selectedItem?.price === "number" && selectedItem.price > 0);
   const shareEntry = !liveUnavailable ? (parseDollarRange(selectedItem?.deployment?.entryRange) ?? selectedPrice) : null;
   const shareStop = !liveUnavailable ? (parseDollarRange(selectedItem?.deployment?.stopRange) ?? selectedPrice * 0.93) : null;
   const shareQuantity = !liveUnavailable && shareEntry && shareEntry > 0 ? Math.max(0, Math.floor(shareCapital / shareEntry)) : null;
@@ -374,7 +374,7 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
                     <div className="metric-row"><span>Confidence</span><strong>{swingPct}%</strong></div>
                     <div className="meter"><i style={{ width: `${swingPct}%` }} /></div>
                     <div className="metric-row"><span>Momentum</span><span className={toneClass(selectedItem.swing?.momentumQuality)}>{selectedItem.swing?.momentumQuality}</span></div>
-                    <div className="entry-map"><div><label>Entry</label><b>{selectedItem.swing?.entryZone ?? "-"}</b></div><div><label>Stop</label><b>{selectedItem.swing?.stopZone ?? "-"}</b></div><div><label>T1</label><b>{selectedItem.swing?.target1 ?? "-"}</b></div><div><label>T2</label><b>{selectedItem.swing?.target2 ?? "-"}</b></div></div>
+                    <div className="entry-map"><div><label>Entry</label><b>{selectedItem.marketDataState === "offline" ? "N/A" : selectedItem.swing?.entryZone ?? "N/A"}</b></div><div><label>Stop</label><b>{selectedItem.marketDataState === "offline" ? "N/A" : selectedItem.swing?.stopZone ?? "N/A"}</b></div><div><label>T1</label><b>{selectedItem.marketDataState === "offline" ? "N/A" : selectedItem.swing?.target1 ?? "N/A"}</b></div><div><label>T2</label><b>{selectedItem.marketDataState === "offline" ? "N/A" : selectedItem.swing?.target2 ?? "N/A"}</b></div></div>
                   </article>
 
                   <article className="glass-card card-long">
