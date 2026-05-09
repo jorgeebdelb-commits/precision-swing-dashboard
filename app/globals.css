@@ -146,6 +146,11 @@ body {
 .market-banner { margin-top: 0.65rem; border-radius: 10px; border: 1px solid rgba(148, 163, 184, 0.25); padding: 0.45rem 0.6rem; display: grid; gap: 0.2rem; background: rgba(15, 23, 42, 0.45); }
 .market-banner strong { font-size: 0.84rem; }
 .market-banner span, .market-banner em { font-size: 0.75rem; color: #cbd5e1; font-style: normal; }
+.market-data-status { margin-top: 0.8rem; border: 1px solid rgba(148, 163, 184, 0.25); border-radius: 10px; padding: 0.6rem; background: rgba(15, 23, 42, 0.45); }
+.market-data-status h3 { margin: 0 0 0.45rem; font-size: 0.85rem; color: #e2e8f0; }
+.market-data-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.45rem 0.8rem; }
+.market-data-grid label { display: block; font-size: 0.7rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em; }
+.market-data-grid b { font-size: 0.8rem; color: #f8fafc; word-break: break-word; }
 .market-open { border-color: rgba(34, 197, 94, 0.45); }
 .market-pre { border-color: rgba(234, 179, 8, 0.45); }
 .market-after, .market-weekend { border-color: rgba(148, 163, 184, 0.35); }

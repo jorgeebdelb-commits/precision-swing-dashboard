@@ -12,10 +12,15 @@ export interface LiveMarketSnapshot {
   stale: boolean;
   unavailable: boolean;
   unavailableReason?: string;
+  provider: string;
+  lastSuccessAt?: string | null;
+  lastError?: string | null;
 }
 
 const STALE_MS = 15 * 60 * 1000;
 const staleQuoteCache = new Map<string, LiveMarketSnapshot>();
+const lastSuccessBySymbol = new Map<string, string>();
+const lastErrorBySymbol = new Map<string, string>();
 
 function getSession(now: Date): MarketSessionState {
   const day = now.getUTCDay();
@@ -36,7 +41,9 @@ export async function getLiveQuote(symbol: string): Promise<LiveMarketSnapshot> 
 
   if (!apiKey) {
     console.warn("[LIVE SNAPSHOT] Missing FINNHUB_API_KEY for", normalized);
-    return { symbol: normalized, price: null, currentPrice: null, bid: null, ask: null, volume: null, timestamp: null, session, stale: true, unavailable: true, unavailableReason: "Missing FINNHUB_API_KEY" };
+    const error = "Missing FINNHUB_API_KEY";
+    lastErrorBySymbol.set(normalized, error);
+    return { symbol: normalized, price: null, currentPrice: null, bid: null, ask: null, volume: null, timestamp: null, session, stale: true, unavailable: true, unavailableReason: error, provider: "Finnhub", lastSuccessAt: lastSuccessBySymbol.get(normalized) ?? null, lastError: error };
   }
 
   try {
@@ -49,7 +56,9 @@ export async function getLiveQuote(symbol: string): Promise<LiveMarketSnapshot> 
 
     if (!quoteResponse.ok || !candleResponse.ok) {
       console.error("[LIVE SNAPSHOT] provider request failed", normalized, quoteResponse.status, candleResponse.status);
-      return { symbol: normalized, price: null, currentPrice: null, bid: null, ask: null, volume: null, timestamp: null, session, stale: true, unavailable: true, unavailableReason: "Quote provider request failed" };
+      const error = `Quote provider request failed (${quoteResponse.status}/${candleResponse.status})`;
+      lastErrorBySymbol.set(normalized, error);
+      return { symbol: normalized, price: null, currentPrice: null, bid: null, ask: null, volume: null, timestamp: null, session, stale: true, unavailable: true, unavailableReason: error, provider: "Finnhub", lastSuccessAt: lastSuccessBySymbol.get(normalized) ?? null, lastError: error };
     }
 
     const quote = await quoteResponse.json();
@@ -66,8 +75,10 @@ export async function getLiveQuote(symbol: string): Promise<LiveMarketSnapshot> 
     if (!Number.isFinite(rawPrice) || rawPrice <= 0) {
       console.warn("[LIVE SNAPSHOT] invalid live price", normalized, quote);
       const cached = staleQuoteCache.get(normalized);
-      if (cached && typeof cached.price === "number" && cached.price > 0) return { ...cached, stale: true, unavailable: false, unavailableReason: "Using stale cached quote" };
-      return { symbol: normalized, price: null, currentPrice: null, bid: null, ask: null, volume: null, timestamp: timestamp.toISOString(), session, stale: true, unavailable: true, unavailableReason: "No live last-trade price" };
+      if (cached && typeof cached.price === "number" && cached.price > 0) return { ...cached, stale: true, unavailable: false, unavailableReason: "Using stale cached quote", lastSuccessAt: lastSuccessBySymbol.get(normalized) ?? cached.lastSuccessAt ?? cached.timestamp ?? null, lastError: "No live last-trade price" };
+      const error = "No live last-trade price";
+      lastErrorBySymbol.set(normalized, error);
+      return { symbol: normalized, price: null, currentPrice: null, bid: null, ask: null, volume: null, timestamp: timestamp.toISOString(), session, stale: true, unavailable: true, unavailableReason: error, provider: "Finnhub", lastSuccessAt: lastSuccessBySymbol.get(normalized) ?? null, lastError: error };
     }
 
     const snapshot = {
@@ -82,14 +93,21 @@ export async function getLiveQuote(symbol: string): Promise<LiveMarketSnapshot> 
       stale,
       unavailable: stale && session !== "regular",
       unavailableReason: stale ? "Live quote is stale" : undefined,
+      provider: "Finnhub",
+      lastSuccessAt: timestamp.toISOString(),
+      lastError: null,
     };
+    lastSuccessBySymbol.set(normalized, timestamp.toISOString());
+    lastErrorBySymbol.delete(normalized);
     staleQuoteCache.set(normalized, snapshot);
     console.log("[LIVE SNAPSHOT]", normalized, snapshot);
     return snapshot;
   } catch (error) {
     console.error("[LIVE SNAPSHOT] fetch failed", normalized, error);
     const cached = staleQuoteCache.get(normalized);
-    if (cached && typeof cached.price === "number" && cached.price > 0) return { ...cached, stale: true, unavailable: false, unavailableReason: "Using stale cached quote" };
-    return { symbol: normalized, price: null, currentPrice: null, bid: null, ask: null, volume: null, timestamp: null, session, stale: true, unavailable: true, unavailableReason: "Live quote fetch failed" };
+    const message = error instanceof Error ? error.message : "Live quote fetch failed";
+    lastErrorBySymbol.set(normalized, message);
+    if (cached && typeof cached.price === "number" && cached.price > 0) return { ...cached, stale: true, unavailable: false, unavailableReason: "Using stale cached quote", lastSuccessAt: lastSuccessBySymbol.get(normalized) ?? cached.lastSuccessAt ?? cached.timestamp ?? null, lastError: message };
+    return { symbol: normalized, price: null, currentPrice: null, bid: null, ask: null, volume: null, timestamp: null, session, stale: true, unavailable: true, unavailableReason: "Live quote fetch failed", provider: "Finnhub", lastSuccessAt: lastSuccessBySymbol.get(normalized) ?? null, lastError: message };
   }
 }

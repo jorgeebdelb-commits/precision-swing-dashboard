@@ -293,6 +293,17 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
 
         {error ? <p className="intel-alert">{error}</p> : null}
         {liveUnavailable ? <p className="intel-alert">Unavailable — Awaiting live market data. Market pricing offline.</p> : null}
+        {selectedItem ? (
+          <section className="market-data-status">
+            <h3>Market Data Status</h3>
+            <div className="market-data-grid">
+              <div><label>Provider</label><b>{selectedItem.marketDataProvider ?? "Unknown"}</b></div>
+              <div><label>Feed State</label><b>{selectedItem.marketDataState === "live" ? "Live" : selectedItem.marketDataState === "cached" ? "Cached" : "Offline"}</b></div>
+              <div><label>Last Success</label><b>{selectedItem.lastQuoteSuccessAt ? new Date(selectedItem.lastQuoteSuccessAt).toLocaleString() : "N/A"}</b></div>
+              <div><label>Last Error</label><b>{selectedItem.lastQuoteError ?? "None"}</b></div>
+            </div>
+          </section>
+        ) : null}
 
         <div className="intel-layout">
           <aside className="watchlist-panel">

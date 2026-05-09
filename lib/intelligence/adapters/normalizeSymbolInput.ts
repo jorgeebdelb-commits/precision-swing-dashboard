@@ -6,6 +6,9 @@ export interface NormalizedSymbolInput {
   priceTimestamp?: string | null;
   marketDataState?: "live" | "cached" | "offline";
   staleData?: boolean;
+  quoteProvider?: string;
+  lastQuoteSuccessAt?: string | null;
+  lastQuoteError?: string | null;
   technicalScore: number;
   fundamentalsScore: number;
   macroScore: number;
@@ -38,6 +41,9 @@ export function normalizeSymbolInput(input: RawSymbolInput): NormalizedSymbolInp
     priceTimestamp: typeof input.priceTimestamp === "string" ? input.priceTimestamp : null,
     marketDataState: input.marketDataState === "live" || input.marketDataState === "cached" || input.marketDataState === "offline" ? input.marketDataState : "offline",
     staleData: typeof input.staleData === "boolean" ? input.staleData : true,
+    quoteProvider: typeof input.quoteProvider === "string" ? input.quoteProvider : "Unknown",
+    lastQuoteSuccessAt: typeof input.lastQuoteSuccessAt === "string" ? input.lastQuoteSuccessAt : null,
+    lastQuoteError: typeof input.lastQuoteError === "string" ? input.lastQuoteError : null,
     technicalScore: safeNumber(input.technicalScore),
     fundamentalsScore: safeNumber(input.fundamentalsScore),
     macroScore: safeNumber(input.macroScore),
