@@ -9,6 +9,10 @@ export interface NormalizedSymbolInput {
   quoteProvider?: string;
   lastQuoteSuccessAt?: string | null;
   lastQuoteError?: string | null;
+  providerLatencyMs?: number | null;
+  quoteRetryCount?: number;
+  staleAgeSeconds?: number | null;
+  quoteQuotaStatus?: string | null;
   technicalScore: number;
   fundamentalsScore: number;
   macroScore: number;
@@ -44,6 +48,10 @@ export function normalizeSymbolInput(input: RawSymbolInput): NormalizedSymbolInp
     quoteProvider: typeof input.quoteProvider === "string" ? input.quoteProvider : "Unknown",
     lastQuoteSuccessAt: typeof input.lastQuoteSuccessAt === "string" ? input.lastQuoteSuccessAt : null,
     lastQuoteError: typeof input.lastQuoteError === "string" ? input.lastQuoteError : null,
+    providerLatencyMs: safeNumber(input.providerLatencyMs, null),
+    quoteRetryCount: safeNumber(input.quoteRetryCount),
+    staleAgeSeconds: safeNumber(input.staleAgeSeconds, null),
+    quoteQuotaStatus: typeof input.quoteQuotaStatus === "string" ? input.quoteQuotaStatus : null,
     technicalScore: safeNumber(input.technicalScore),
     fundamentalsScore: safeNumber(input.fundamentalsScore),
     macroScore: safeNumber(input.macroScore),
