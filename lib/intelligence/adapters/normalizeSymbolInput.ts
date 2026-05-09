@@ -3,6 +3,9 @@ import { safeNumber } from "@/lib/intelligence/utils/safeNumber";
 export interface NormalizedSymbolInput {
   symbol: string;
   price: number;
+  priceTimestamp?: string | null;
+  marketDataState?: "live" | "cached" | "offline";
+  staleData?: boolean;
   technicalScore: number;
   fundamentalsScore: number;
   macroScore: number;
@@ -32,6 +35,9 @@ export function normalizeSymbolInput(input: RawSymbolInput): NormalizedSymbolInp
   return {
     symbol,
     price: safeNumber(input.price),
+    priceTimestamp: typeof input.priceTimestamp === "string" ? input.priceTimestamp : null,
+    marketDataState: input.marketDataState === "live" || input.marketDataState === "cached" || input.marketDataState === "offline" ? input.marketDataState : "offline",
+    staleData: typeof input.staleData === "boolean" ? input.staleData : true,
     technicalScore: safeNumber(input.technicalScore),
     fundamentalsScore: safeNumber(input.fundamentalsScore),
     macroScore: safeNumber(input.macroScore),

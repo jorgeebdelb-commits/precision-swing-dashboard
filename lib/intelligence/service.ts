@@ -29,6 +29,9 @@ async function buildInput(symbol: string): Promise<NormalizedSymbolInput> {
     return normalizeSymbolInput({
       symbol,
       price,
+      priceTimestamp: live.timestamp ?? null,
+      marketDataState: live.price != null && live.price > 0 ? (live.stale ? "cached" : "live") : "offline",
+      staleData: live.stale || live.price == null || live.price <= 0,
       support,
       resistance,
       lr50: price,
@@ -52,6 +55,9 @@ async function buildInput(symbol: string): Promise<NormalizedSymbolInput> {
     return normalizeSymbolInput({
       symbol,
       price,
+      priceTimestamp: fallback.timestamp ?? null,
+      marketDataState: "offline",
+      staleData: true,
       support: 0.01,
       resistance: 0.02,
       lr50: price,
