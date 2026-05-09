@@ -14,14 +14,14 @@ export interface LiveMarketSnapshot {
   currentPrice: number | null;
   session: MarketSessionState;
   stale: boolean;
-  staleAgeSeconds?: number;
+  staleAgeSeconds?: number | null;
   unavailable: boolean;
   unavailableReason?: string;
   provider: string;
   providerState?: MarketProviderState;
   providerLatencyMs?: number | null;
   quotaStatus?: string | null;
-  retryCount?: number;
+  retryCount?: number | null;
   lastSuccessAt?: string | null;
   lastError?: string | null;
 }

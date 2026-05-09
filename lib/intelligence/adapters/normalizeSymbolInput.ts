@@ -10,7 +10,7 @@ export interface NormalizedSymbolInput {
   lastQuoteSuccessAt?: string | null;
   lastQuoteError?: string | null;
   providerLatencyMs?: number | null;
-  quoteRetryCount?: number;
+  quoteRetryCount?: number | null;
   staleAgeSeconds?: number | null;
   quoteQuotaStatus?: string | null;
   technicalScore: number;
