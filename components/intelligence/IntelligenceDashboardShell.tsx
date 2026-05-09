@@ -4,13 +4,13 @@ import { useCallback, useMemo, useState, type FormEvent } from "react";
 import type { BattlefieldApiResponse, BattlefieldOutput } from "@/lib/intelligence/types/battlefield";
 import { resolveBattlefieldState } from "@/lib/intelligence/resolver/battlefieldStateResolver";
 
-type Timeframe = "5m" | "15m" | "1H" | "4H" | "1D" | "1W";
+type Timeframe = "1D";
 
 interface IntelligenceDashboardShellProps { initialData: BattlefieldApiResponse; }
 
 const stateColors: Record<string, string> = { READY: "state-ready", SETUP: "state-setup", WATCH: "state-watch", AVOID: "state-avoid" };
 
-const tfOptions: Timeframe[] = ["5m", "15m", "1H", "4H", "1D", "1W"];
+const tfOptions: Timeframe[] = ["1D"];
 
 function parseDollarRange(value?: string) {
   if (!value) return null;
@@ -81,15 +81,45 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
 
   const candles = useMemo(() => {
     const base = chartLevels.price || 100;
-    return Array.from({ length: 40 }, (_, i) => {
-      const drift = Math.sin(i / 4) * 1.8 + (i - 20) * 0.04;
-      const open = base + drift + (Math.random() - 0.5) * 1.2;
-      const close = open + (Math.random() - 0.5) * 2.4;
-      const high = Math.max(open, close) + Math.random() * 1.5;
-      const low = Math.min(open, close) - Math.random() * 1.5;
-      return { open, close, high, low, volume: 40 + Math.random() * 80 };
+    const total = 252 * 4;
+    let close = base * 0.68;
+    return Array.from({ length: total }, (_, i) => {
+      const seasonal = Math.sin(i / 36) * base * 0.0045;
+      const trend = base * 0.00022;
+      const shock = (Math.random() - 0.5) * base * 0.008;
+      const open = close;
+      close = Math.max(base * 0.42, open + trend + seasonal + shock);
+      const high = Math.max(open, close) + Math.abs((Math.random() * base * 0.008) + base * 0.0012);
+      const low = Math.min(open, close) - Math.abs((Math.random() * base * 0.008) + base * 0.0012);
+      const volumeWave = 0.7 + (Math.sin(i / 9) + 1) * 0.35;
+      const volume = Math.max(100000, Math.round((1200000 + Math.random() * 1800000) * volumeWave));
+      return { open, close, high, low, volume };
     });
   }, [chartLevels.price]);
+
+  const chartMetrics = useMemo(() => {
+    if (candles.length === 0) return null;
+    const priceMin = Math.min(...candles.map((c) => c.low), chartLevels.stop, chartLevels.lr100, chartLevels.support);
+    const priceMax = Math.max(...candles.map((c) => c.high), chartLevels.target2, chartLevels.resistance, chartLevels.entry);
+    const priceRange = Math.max(0.01, priceMax - priceMin);
+    const pad = priceRange * 0.1;
+    const scaledMin = priceMin - pad;
+    const scaledMax = priceMax + pad;
+    const scaledRange = Math.max(0.01, scaledMax - scaledMin);
+    const volumeMax = Math.max(...candles.map((c) => c.volume), 1);
+    const toY = (price: number) => ((scaledMax - price) / scaledRange) * 100;
+    const lr50Series = candles.map((_, i) => {
+      const start = Math.max(0, i - 49);
+      const subset = candles.slice(start, i + 1);
+      return subset.reduce((sum, c) => sum + c.close, 0) / subset.length;
+    });
+    const lr100Series = candles.map((_, i) => {
+      const start = Math.max(0, i - 99);
+      const subset = candles.slice(start, i + 1);
+      return subset.reduce((sum, c) => sum + c.close, 0) / subset.length;
+    });
+    return { scaledMin, scaledMax, scaledRange, volumeMax, toY, lr50Series, lr100Series };
+  }, [candles, chartLevels]);
 
   const onSelectSymbol = useCallback((symbol: string) => { setSelectedSymbol(symbol); void refreshSymbol(symbol, true); }, [refreshSymbol]);
   const removeSymbol = useCallback(async (symbol: string) => { if (removingSymbols[symbol]) return; setRemovingSymbols((p) => ({ ...p, [symbol]: true })); setWatchlistSymbols((prev) => prev.filter((x) => x !== symbol)); try { await fetch(`/api/watchlist?symbol=${encodeURIComponent(symbol)}`, { method: "DELETE" }); } finally { setRemovingSymbols((p) => { const n = { ...p }; delete n[symbol]; return n; }); } }, [removingSymbols]);
@@ -103,7 +133,20 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
       <header className="console-head"><h1>V9 Trading Intelligence Console</h1><small>Generated {generatedAt ? new Date(generatedAt).toLocaleString() : "-"}</small></header>
       {error ? <p className="intel-alert">{error}</p> : null}
       <section className="chart-card"><div className="chart-toolbar"><div className="tf-group">{tfOptions.map((tf) => <button key={tf} className={timeframe === tf ? "active" : ""} onClick={() => setTimeframe(tf)}>{tf}</button>)}</div><div className="bias-mini"><span>Bullish</span><span>Neutral</span><span>Bearish</span></div></div>
-        <div className="chart-area">{candles.map((c, i) => <div key={i} className="candle" style={{ left: `${(i / candles.length) * 100}%` }}><i className="wick" style={{ height: `${Math.max(18, (c.high - c.low) * 6)}px` }} /><b className={c.close >= c.open ? "up" : "down"} style={{ height: `${Math.max(8, Math.abs(c.close - c.open) * 8)}px` }} /></div>)}<div className="line entry">Entry {chartLevels.entry.toFixed(2)}</div><div className="line stop">Stop {chartLevels.stop.toFixed(2)}</div><div className="line target">T1 {chartLevels.target1.toFixed(2)}</div></div>
+        <div className="chart-area"><div className="price-panel">{chartMetrics ? candles.map((c, i) => {
+          const left = (i / candles.length) * 100;
+          const width = Math.max(0.08, 100 / candles.length * 0.68);
+          const highY = chartMetrics.toY(c.high);
+          const lowY = chartMetrics.toY(c.low);
+          const openY = chartMetrics.toY(c.open);
+          const closeY = chartMetrics.toY(c.close);
+          const bodyTop = Math.min(openY, closeY);
+          const bodyHeight = Math.max(0.28, Math.abs(openY - closeY));
+          return <div key={i} className="candle" style={{ left: `${left}%`, width: `${width}%` }}><i className="wick" style={{ top: `${highY}%`, height: `${Math.max(0.2, lowY - highY)}%` }} /><b className={c.close >= c.open ? "up" : "down"} style={{ top: `${bodyTop}%`, height: `${bodyHeight}%` }} /></div>;
+        }) : null}
+          <div className="overlay-line entry" style={{ top: `${chartMetrics?.toY(chartLevels.entry) ?? 45}%` }}>Entry {chartLevels.entry.toFixed(2)}</div><div className="overlay-line stop" style={{ top: `${chartMetrics?.toY(chartLevels.stop) ?? 58}%` }}>Stop {chartLevels.stop.toFixed(2)}</div><div className="overlay-line target" style={{ top: `${chartMetrics?.toY(chartLevels.target1) ?? 32}%` }}>T1 {chartLevels.target1.toFixed(2)}</div><div className="overlay-line target2" style={{ top: `${chartMetrics?.toY(chartLevels.target2) ?? 24}%` }}>T2 {chartLevels.target2.toFixed(2)}</div>
+          <div className="overlay-line lr50" style={{ top: `${chartMetrics?.toY(chartMetrics?.lr50Series.at(-1) ?? chartLevels.lr50) ?? 50}%` }}>LR50</div><div className="overlay-line lr100" style={{ top: `${chartMetrics?.toY(chartMetrics?.lr100Series.at(-1) ?? chartLevels.lr100) ?? 56}%` }}>LR100</div>
+        </div><div className="volume-panel">{chartMetrics ? candles.map((c, i) => <span key={i} className={`volume-bar ${c.close >= c.open ? "up" : "down"}`} style={{ left: `${(i / candles.length) * 100}%`, width: `${Math.max(0.08, 100 / candles.length * 0.68)}%`, height: `${(c.volume / chartMetrics.volumeMax) * 100}%` }} />) : null}</div></div>
         <div className="trigger-text">Breakout above {chartLevels.entry.toFixed(2)} • Volume &gt;= 1.2x avg • Invalid below {chartLevels.stop.toFixed(2)}</div>
       </section>
       <section className="intel-panels">{[
