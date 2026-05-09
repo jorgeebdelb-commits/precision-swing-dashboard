@@ -15,6 +15,7 @@ export interface LiveMarketSnapshot {
 }
 
 const STALE_MS = 15 * 60 * 1000;
+const staleQuoteCache = new Map<string, LiveMarketSnapshot>();
 
 function getSession(now: Date): MarketSessionState {
   const day = now.getUTCDay();
@@ -53,16 +54,19 @@ export async function getLiveQuote(symbol: string): Promise<LiveMarketSnapshot> 
 
     const quote = await quoteResponse.json();
     const candle = await candleResponse.json();
+    console.log("[QUOTE RAW]", normalized, quote);
 
-    const rawPrice = Number(quote?.c);
+    const rawPrice = Number(quote?.c ?? quote?.price ?? quote?.last ?? quote?.lastPrice);
     const quoteTsMs = Number(quote?.t) > 0 ? Number(quote.t) * 1000 : 0;
     const candleVolumes = Array.isArray(candle?.v) ? candle.v : [];
     const latestVolume = candleVolumes.length > 0 ? Number(candleVolumes[candleVolumes.length - 1]) : null;
     const timestamp = quoteTsMs > 0 ? new Date(quoteTsMs) : now;
-    const stale = session === "weekend" ? true : now.getTime() - timestamp.getTime() > STALE_MS;
+    const stale = now.getTime() - timestamp.getTime() > STALE_MS;
 
     if (!Number.isFinite(rawPrice) || rawPrice <= 0) {
       console.warn("[LIVE SNAPSHOT] invalid live price", normalized, quote);
+      const cached = staleQuoteCache.get(normalized);
+      if (cached && typeof cached.price === "number" && cached.price > 0) return { ...cached, stale: true, unavailable: false, unavailableReason: "Using stale cached quote" };
       return { symbol: normalized, price: null, currentPrice: null, bid: null, ask: null, volume: null, timestamp: timestamp.toISOString(), session, stale: true, unavailable: true, unavailableReason: "No live last-trade price" };
     }
 
@@ -79,10 +83,13 @@ export async function getLiveQuote(symbol: string): Promise<LiveMarketSnapshot> 
       unavailable: stale && session !== "regular",
       unavailableReason: stale ? "Live quote is stale" : undefined,
     };
+    staleQuoteCache.set(normalized, snapshot);
     console.log("[LIVE SNAPSHOT]", normalized, snapshot);
     return snapshot;
   } catch (error) {
     console.error("[LIVE SNAPSHOT] fetch failed", normalized, error);
+    const cached = staleQuoteCache.get(normalized);
+    if (cached && typeof cached.price === "number" && cached.price > 0) return { ...cached, stale: true, unavailable: false, unavailableReason: "Using stale cached quote" };
     return { symbol: normalized, price: null, currentPrice: null, bid: null, ask: null, volume: null, timestamp: null, session, stale: true, unavailable: true, unavailableReason: "Live quote fetch failed" };
   }
 }

@@ -334,7 +334,7 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
                   <div key={symbol} className={`watch-row ${selectedSymbol === symbol ? "selected" : ""}`}>
                     <button type="button" className="watch-row-select" onClick={() => onSelectSymbol(symbol)}>
                     <span>{symbol}</span>
-                    <span>{typeof item?.price === "number" && item.price > 0 ? item.price.toFixed(2) : "Live market data unavailable"}</span>
+                    <span>{typeof item?.price === "number" && item.price > 0 ? item.price.toFixed(2) : "N/A"}</span>
                     <span className={resolvedBySymbol[symbol] ? classificationClass(resolvedBySymbol[symbol].primaryOpportunity) : "class-neither"}>{resolvedBySymbol[symbol]?.primaryOpportunity ?? "Neither"}</span>
                     </button>
                     <span className="watch-row-action">
@@ -363,6 +363,7 @@ export default function IntelligenceDashboardShell({ initialData }: Intelligence
                   <h2>{selectedItem.symbol}</h2>
                   <div className={`status-chip ${toneClass(resolved?.primaryOpportunity)}`}>{resolved?.primaryOpportunity ?? "Neither"}</div>
                   <p>{resolved?.battlefieldState ?? "No Edge"} • Confidence {resolved?.confidenceAdjusted ?? 0}% · {convictionGrade} Conviction · {effectiveAllocationLabel} • {resolved?.tacticalSummary ?? selectedItem.battlefieldSummary}</p>
+                  <p>{selectedItem.price > 0 ? (selectedItem.priceTimestamp ? "🟢 Live Market Data" : "🟡 Cached Market Data") : "🔴 Market Data Offline"}</p>
                   {resolved?.riskFlags?.length ? <div className="deployment-mix">{resolved.riskFlags.map((flag) => <span key={flag} className="inactive">{flag}</span>)}</div> : null}
                 </div>
                 <div className="grid-ops">

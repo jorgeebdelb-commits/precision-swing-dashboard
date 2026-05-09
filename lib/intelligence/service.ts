@@ -17,8 +17,8 @@ export async function getWatchlistSymbols(): Promise<string[]> {
 async function buildInput(symbol: string): Promise<NormalizedSymbolInput> {
   try {
     const live = await getLiveQuote(symbol);
-    const price = typeof live.price === "number" && live.price > 0 ? live.price : 100;
-    const spread = typeof live.bid === "number" && typeof live.ask === "number" ? Math.max(0, live.ask - live.bid) : price * 0.003;
+    const price = typeof live.price === "number" && live.price > 0 ? live.price : 0;
+    const spread = typeof live.bid === "number" && typeof live.ask === "number" ? Math.max(0, live.ask - live.bid) : Math.max(price * 0.003, 0.01);
     const support = Math.max(0.01, price - Math.max(spread * 4, price * 0.015));
     const resistance = price + Math.max(spread * 4, price * 0.015);
 
@@ -35,7 +35,7 @@ async function buildInput(symbol: string): Promise<NormalizedSymbolInput> {
       lr100: price,
       vwap: price,
       rsi: 50,
-      atrPercent: (Math.max(0.01, resistance - support) / price) * 100,
+      atrPercent: price > 0 ? (Math.max(0.01, resistance - support) / price) * 100 : 0,
       volumeRatio: 1,
       volume: live.volume ?? 0,
       technicalScore: 0,
@@ -48,12 +48,12 @@ async function buildInput(symbol: string): Promise<NormalizedSymbolInput> {
   } catch (error) {
     const fallback = createFallbackSnapshot({ symbol, session: "closed", reason: "buildInput failed" });
     console.error("[LIVE SNAPSHOT] buildInput failed", symbol, error, fallback);
-    const price = 100;
+    const price = 0;
     return normalizeSymbolInput({
       symbol,
       price,
-      support: price * 0.985,
-      resistance: price * 1.015,
+      support: 0.01,
+      resistance: 0.02,
       lr50: price,
       lr100: price,
       vwap: price,
